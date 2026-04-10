@@ -40,6 +40,14 @@ public:
    */
   void update(Ogre::Camera * camera);
 
+  /**
+   * @brief Set the 3D covariance matrix components.
+   * Matrix is symmetric: [v11, v12, v13]
+   *                      [v12, v22, v23]
+   *                      [v13, v23, v33]
+   */
+  void setCovariance(float v11, float v12, float v13, float v22, float v23, float v33);
+
 private:
   std::unique_ptr<rviz_rendering::MeshShape> mesh_shape_;
 };

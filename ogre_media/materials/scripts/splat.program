@@ -1,6 +1,12 @@
 vertex_program gsplat_rviz_trials/Splat.vert glsl
 {
     source splat.vert
+    default_params
+    {
+        param_named_auto worldviewproj_matrix worldviewproj_matrix
+        param_named_auto view_matrix view_matrix
+        param_named covariance3D_padded matrix3x3 1.0 0.0 0.0 0.0 1.0 0.0 0.0 0.0 1.0
+    }
 }
 
 fragment_program gsplat_rviz_trials/Splat.frag glsl
