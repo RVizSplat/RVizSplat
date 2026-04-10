@@ -47,4 +47,13 @@ Splat::Splat(Ogre::SceneManager * scene_manager, Ogre::SceneNode * parent_node)
 
 Splat::~Splat() = default;
 
+void Splat::update(Ogre::Camera * camera)
+{
+  if (camera && mesh_shape_) {
+    // Make the rectangle face the camera by copying its orientation.
+    // This assumes the rectangle is defined in the XY plane.
+    mesh_shape_->setOrientation(camera->getDerivedOrientation());
+  }
+}
+
 }  // namespace gsplat_rviz_trials

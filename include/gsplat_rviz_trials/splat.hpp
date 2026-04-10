@@ -2,6 +2,7 @@
 #define GSPLAT_RVIZ_TRIALS__SPLAT_HPP_
 
 #include <memory>
+#include <OgreCamera.h>
 
 #include "gsplat_rviz_trials/visibility_control.hpp"
 
@@ -32,6 +33,12 @@ public:
    */
   Splat(Ogre::SceneManager * scene_manager, Ogre::SceneNode * parent_node);
   virtual ~Splat();
+
+  /**
+   * @brief Update the splat orientation to face the camera.
+   * @param camera The camera to face.
+   */
+  void update(Ogre::Camera * camera);
 
 private:
   std::unique_ptr<rviz_rendering::MeshShape> mesh_shape_;

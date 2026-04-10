@@ -6,7 +6,12 @@
 #include <OgreSceneManager.h>
 #include <OgreEntity.h>
 #include <OgreMaterialManager.h>
+#include <OgreCamera.h>
+
 #include "pluginlib/class_list_macros.hpp"
+#include "rviz_common/display_context.hpp"
+#include "rviz_common/view_manager.hpp"
+#include "rviz_common/view_controller.hpp"
 #include "rviz_common/properties/status_property.hpp"
 #include "gsplat_rviz_trials/splat.hpp"
 
@@ -45,6 +50,12 @@ void GsplatDisplay::update(
   std::chrono::nanoseconds /*wall_dt*/,
   std::chrono::nanoseconds /*ros_dt*/)
 {
+  if (splat_ && context_ && context_->getViewManager()) {
+    rviz_common::ViewController * view_controller = context_->getViewManager()->getCurrent();
+    if (view_controller) {
+      splat_->update(view_controller->getCamera());
+    }
+  }
 }
 
 void GsplatDisplay::reset()
