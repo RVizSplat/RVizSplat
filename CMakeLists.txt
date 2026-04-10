@@ -72,6 +72,11 @@ target_link_libraries(gsplat_rviz_trials PUBLIC
 
 target_compile_definitions(gsplat_rviz_trials PRIVATE "GSPLAT_RVIZ_TRIALS_BUILDING_LIBRARY")
 
+register_rviz_ogre_media_exports(DIRECTORIES 
+  "ogre_media/materials/scripts"
+  "ogre_media/materials/glsl120"
+)
+
 pluginlib_export_plugin_description_file(rviz_common plugins_description.xml)
 
 ament_export_include_directories("include/${PROJECT_NAME}")

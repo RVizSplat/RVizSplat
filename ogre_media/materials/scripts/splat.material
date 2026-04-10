@@ -1,0 +1,21 @@
+material gsplat_rviz_trials/GaussianSplat
+{
+    technique
+    {
+        pass
+        {
+            lighting off
+            scene_blend alpha_blend
+            depth_write off
+            cull_hardware none
+
+            vertex_program_ref gsplat_rviz_trials/Splat.vert
+            {
+            }
+
+            fragment_program_ref gsplat_rviz_trials/Splat.frag
+            {
+            }
+        }
+    }
+}

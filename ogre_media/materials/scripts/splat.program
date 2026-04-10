@@ -1,0 +1,9 @@
+vertex_program gsplat_rviz_trials/Splat.vert glsl
+{
+    source splat.vert
+}
+
+fragment_program gsplat_rviz_trials/Splat.frag glsl
+{
+    source splat.frag
+}
