@@ -35,7 +35,14 @@ GsplatDisplay::~GsplatDisplay() = default;
 void GsplatDisplay::onInitialize()
 {
   rviz_common::Display::onInitialize();
-  splat_ = std::make_unique<gsplat_rviz_trials::Splat>(scene_manager_, scene_node_);
+  
+  float default_covariance[6] = {1.0f, 0.0f, 0.0f, 10.0f, 0.0f, 50.0f};
+  Ogre::Vector3 default_position(0.0f, 0.0f, 0.0f);
+  Ogre::ColourValue default_color(1.0f, 0.0f, 0.0f, 1.0f);
+
+  splat_ = std::make_unique<gsplat_rviz_trials::Splat>(
+    scene_manager_, scene_node_, 
+    default_position, default_covariance, default_color);
 }
 
 void GsplatDisplay::onEnable()

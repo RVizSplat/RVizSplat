@@ -15,19 +15,25 @@
 namespace gsplat_rviz_trials
 {
 
-Splat::Splat(Ogre::SceneManager * scene_manager, Ogre::SceneNode * parent_node)
+Splat::Splat(
+  Ogre::SceneManager * scene_manager, 
+  Ogre::SceneNode * parent_node,
+  const Ogre::Vector3 & position,
+  const float covariance[6],
+  const Ogre::ColourValue & color)
 {
   mesh_shape_ = std::make_unique<rviz_rendering::MeshShape>(scene_manager, parent_node);
+  mesh_shape_->setPosition(position);
 
   Ogre::ManualObject * mo = mesh_shape_->getManualObject();
   mesh_shape_->beginTriangles();
   
   // Define a larger quad (4x4) to ensure the Gaussian falloff has space
   // We use UVs from 0 to 1
-  mo->position(-4.0f, -4.0f, 0.0f); mo->textureCoord(0.0f, 0.0f);
-  mo->position( 4.0f, -4.0f, 0.0f); mo->textureCoord(1.0f, 0.0f);
-  mo->position( 4.0f,  4.0f, 0.0f); mo->textureCoord(1.0f, 1.0f);
-  mo->position(-4.0f,  4.0f, 0.0f); mo->textureCoord(0.0f, 1.0f);
+  mo->position(position + Ogre::Vector3(-3.0f, -3.0f, 0.0f)); mo->textureCoord(0.0f, 0.0f);
+  mo->position(position + Ogre::Vector3( 3.0f, -3.0f, 0.0f)); mo->textureCoord(1.0f, 0.0f);
+  mo->position(position + Ogre::Vector3( 3.0f,  3.0f, 0.0f)); mo->textureCoord(1.0f, 1.0f);
+  mo->position(position + Ogre::Vector3(-3.0f,  3.0f, 0.0f)); mo->textureCoord(0.0f, 1.0f);
   
   mesh_shape_->addTriangle(0, 1, 2);
   mesh_shape_->addTriangle(0, 2, 3);
@@ -36,10 +42,10 @@ Splat::Splat(Ogre::SceneManager * scene_manager, Ogre::SceneNode * parent_node)
   if (mesh_shape_->getEntity()) {
     mesh_shape_->getEntity()->setMaterialName("gsplat_rviz_trials/GaussianSplat", "rviz_rendering");
   }
-  mesh_shape_->setColor(1.0f, 0.0f, 0.0f, 1.0f);
+  mesh_shape_->setColor(color.r, color.g, color.b, color.a);
 
-  // Set a default identity-like covariance (small sphere)
-  setCovariance(5.0f, 0.0f, 0.0f, 100.0f, 0.0f, 1000.0f);
+  // Set the initial covariance
+  setCovariance(covariance[0], covariance[1], covariance[2], covariance[3], covariance[4], covariance[5]);
 }
 
 Splat::~Splat() = default;
@@ -60,9 +66,7 @@ void Splat::setCovariance(float v11, float v12, float v13, float v22, float v23,
     Ogre::SubEntity * sub = entity->getSubEntity(i);
     Ogre::GpuProgramParametersSharedPtr params = sub->getTechnique()->getPass(0)->getVertexProgramParameters();
     if (params) {
-      // Pass covariance as two vec3s or a matrix. 
-      // We'll pass it as a custom parameter for simplicity if we can, 
-      // but GpuProgramParameters is more reliable for matrices.
+      // Pass covariance as a matrix.
       float sigma_arr[9] = {
         v11, v12, v13,
         v12, v22, v23,

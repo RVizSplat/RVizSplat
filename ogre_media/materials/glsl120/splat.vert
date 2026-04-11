@@ -59,6 +59,6 @@ void main()
     vec2 viewport = viewportSize.xy;
     gl_Position = vec4(
         vCenter
-            + vPosition.x * v1 / viewport * 2.0
-            + vPosition.y * v2 / viewport * 2.0, 0.0, 1.0);
+            + (vPosition.x / 1.5) * v1 / viewport * 2.0
+            + (vPosition.y / 1.5) * v2 / viewport * 2.0, 0.0, 1.0);
 }

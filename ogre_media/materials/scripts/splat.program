@@ -8,7 +8,7 @@ vertex_program gsplat_rviz_trials/Splat.vert glsl
         param_named_auto projectionMatrix projection_matrix
         param_named_auto cam_pos camera_position
         param_named_auto viewportSize viewport_size
-        param_named covariance3D_padded float 0.05 0.0 0.0 0.0 0.1 0.0 0.0 0.0 1.0
+        param_named covariance3D_padded float 1.0 0.0 0.0 0.0 1.0 0.0 0.0 0.0 1.0
     }
 }
 
