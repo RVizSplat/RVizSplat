@@ -54,16 +54,26 @@ public:
   void update(Ogre::Camera * camera);
 
   /**
+   * @brief Set the 3D center position of the splat.
+   */
+  void setCenter(const Ogre::Vector3 & position);
+
+  /**
+   * @brief Set the RGBA color of the splat.
+   */
+  void setColor(const Ogre::ColourValue & color);
+
+  /**
    * @brief Set the 3D covariance matrix components.
-   * Matrix is symmetric: [v11, v12, v13]
-   *                      [v12, v22, v23]
-   *                      [v13, v23, v33]
+...
    */
   void setCovariance(float v11, float v12, float v13, float v22, float v23, float v33);
 
 private:
   std::unique_ptr<rviz_rendering::MeshShape> mesh_shape_;
   float covariance_[6];
+  Ogre::Vector3 center_;
+  Ogre::ColourValue color_;
 };
 
 }  // namespace gsplat_rviz_trials
