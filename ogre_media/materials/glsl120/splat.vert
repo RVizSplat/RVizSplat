@@ -30,8 +30,8 @@ void main()
     }
 
     // 1. Transform 3D covariance to camera space
-    // W is the transpose of world-to-camera rotation (top-left 3x3 of view_matrix)
-    mat3 W = transpose(mat3(view_matrix));
+    // R is the world-to-camera rotation (top-left 3x3 of view_matrix)
+    mat3 R = (mat3(view_matrix));
 
     mat3 J = mat3(
         projectionMatrix[0][0] / camspace.z, 0.0,
@@ -43,24 +43,29 @@ void main()
         0.0, 0.0, 0.0
     );
     
-    mat3 T = W * J;
+    mat3 T = R * J;
 
     // Sigma_cam = R * Sigma * R^T
     mat3 cov = transpose(T) * covariance3D * T;
     
     vec2 vCenter = vec2(pos2d) / pos2d.w;
 
-    float diagonal1 = cov[0][0] + 0.3;
+    float diagonal1 = cov[0][0];
+    // float diagonal1 = cov[0][0] + 0.3; // Done for some numerical stability
     float offDiagonal = cov[0][1];
-    float diagonal2 = cov[1][1] + 0.3;
+    float diagonal2 = cov[1][1];
+    // float diagonal2 = cov[1][1] + 0.3;
 
     float mid = 0.5 * (diagonal1 + diagonal2);
     float radius = length(vec2((diagonal1 - diagonal2) / 2.0, offDiagonal));
     float lambda1 = mid + radius;
-    float lambda2 = max(mid - radius, 0.1);
+    float lambda2 = mid - radius;
+    // float lambda2 = max(mid - radius, 0.1); // Done to avoid degeneracy
     vec2 diagonalvector = normalize(vec2(offDiagonal, lambda1 - diagonal1));
-    vec2 v1 = min(sqrt(2.0 * lambda1), 1024.0) * diagonalvector;
-    vec2 v2 = min(sqrt(2.0 * lambda2), 1024.0) * vec2(diagonalvector.y, -diagonalvector.x);
+    // vec2 v1 = min(sqrt(2.0 * lambda1), 1024.0) * diagonalvector;     // Prevents large splats
+    // vec2 v2 = min(sqrt(2.0 * lambda2), 1024.0) * vec2(diagonalvector.y, -diagonalvector.x);
+    vec2 v1 = sqrt( lambda1) * diagonalvector;
+    vec2 v2 = sqrt( lambda2) * vec2(diagonalvector.y, -diagonalvector.x);
 
     // vec3 ray_direction = normalize(splat_center - cam_pos);
     vColor.rgb = splat_color.rgb;
@@ -68,9 +73,8 @@ void main()
     vColor.a = splat_color.a;
     vPosition = gl_Vertex.xy;
 
-    vec2 viewport = viewportSize.xy;
     gl_Position = vec4(
         vCenter
-            + (vPosition.x) * v1 / viewport * 2.0
-            + (vPosition.y) * v2 / viewport * 2.0, 0.0, 1.0);
+            + (vPosition.x) * v1
+            + (vPosition.y) * v2, 0.0, 1.0);
 }
