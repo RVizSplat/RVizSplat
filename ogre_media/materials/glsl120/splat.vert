@@ -29,10 +29,6 @@ void main()
         return;
     }
 
-    // 1. Transform 3D covariance to camera space
-    // R is the world-to-camera rotation (top-left 3x3 of view_matrix)
-    mat3 R = (mat3(view_matrix));
-
     mat3 J = mat3(
         projectionMatrix[0][0] / camspace.z, 0.0,
         -(projectionMatrix[0][0] * camspace.x) / (camspace.z * camspace.z),
@@ -43,9 +39,10 @@ void main()
         0.0, 0.0, 0.0
     );
     
+    mat3 R = transpose(mat3(view_matrix));
+    R[0][1] = -R[0][1];
+    R[1][0] = -R[1][0];
     mat3 T = R * J;
-
-    // Sigma_cam = R * Sigma * R^T
     mat3 cov = transpose(T) * covariance3D * T;
     
     vec2 vCenter = vec2(pos2d) / pos2d.w;

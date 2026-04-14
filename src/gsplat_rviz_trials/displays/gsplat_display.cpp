@@ -36,7 +36,7 @@ void GsplatDisplay::onInitialize()
 {
   rviz_common::Display::onInitialize();
   
-  float default_covariance[6] = {1.0, 0.0f, 0.0f, 2.0, 0.0f, 50.0};
+  float default_covariance[6] = {9.0, 0.0f, 0.0f, 4.0, 0.0f, 1.0};
   Ogre::Vector3 default_position(0.0f, 0.0f, 0.0f);
   Ogre::ColourValue default_color(1.0f, 0.0f, 0.0f, 1.0f);
 
