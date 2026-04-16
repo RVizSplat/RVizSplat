@@ -49,6 +49,7 @@ endforeach()
 
 set(gsplat_rviz_trials_source_files
   src/gsplat_rviz_trials/displays/gsplat_display.cpp
+  src/gsplat_rviz_trials/ply_loader.cpp
   src/gsplat_rviz_trials/splat.cpp
 )
 
