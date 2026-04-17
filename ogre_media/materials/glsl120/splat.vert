@@ -107,8 +107,8 @@ void main()
     R[1][0] = -R[1][0];
     mat3 T = R * J;
     mat3 cov = transpose(T) * covariance3D * T;
-
-    vec2 vCenter = vec2(pos2d) / pos2d.w;
+    
+    vec3 vCenter = vec3(pos2d) / pos2d.w;
 
     float diagonal1   = cov[0][0];
     float offDiagonal = cov[0][1];
@@ -129,7 +129,7 @@ void main()
     vPosition  = gl_Vertex.xy;
 
     gl_Position = vec4(
-        vCenter
-            + vPosition.x * v1
-            + vPosition.y * v2, 0.0, 1.0);
+        vCenter.xy
+            + (vPosition.x) * v1
+            + (vPosition.y) * v2, vCenter.z, 1.0);
 }
