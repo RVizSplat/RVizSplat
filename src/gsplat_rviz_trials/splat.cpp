@@ -112,7 +112,7 @@ void Splat::setColor(const Ogre::ColourValue & color)
 
   auto params = getVertexParams();
   if (params) {
-    params->setNamedConstant("splat_color", color_);
+    params->setNamedConstant("splat_opacity", color_.a);
   }
 }
 
@@ -123,12 +123,10 @@ void Splat::setCovariance(float v11, float v12, float v13, float v22, float v23,
 
   auto params = getVertexParams();
   if (params) {
-    float sigma_arr[9] = {
-      v11, v12, v13,
-      v12, v22, v23,
-      v13, v23, v33
-    };
-    params->setNamedConstant("covariance3D", sigma_arr, 3, 3);
+    Ogre::Vector3 row0(v11, v12, v13);
+    Ogre::Vector3 row1(v22, v23, v33);
+    params->setNamedConstant("cov_row0", row0);
+    params->setNamedConstant("cov_row1", row1);
   }
 }
 

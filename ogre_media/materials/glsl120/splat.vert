@@ -2,12 +2,13 @@
 
 uniform mat4 worldviewproj_matrix;
 uniform mat4 view_matrix, projectionMatrix;
-uniform mat3 covariance3D;
+uniform vec3 cov_row0;       // (v11, v12, v13) — upper row of symmetric 3D cov
+uniform vec3 cov_row1;       // (v22, v23, v33) — remaining unique entries
 uniform vec2 focal;
 uniform vec3 cam_pos;
 uniform vec4 viewportSize;
 uniform vec3 splat_center;
-uniform vec4 splat_color;
+uniform float splat_opacity;
 
 // Spherical harmonics coefficients in coefficient-major order.
 // spherical_harmonics[i] = (R, G, B) contribution of SH basis function i.
@@ -102,6 +103,12 @@ void main()
         0.0, 0.0, 0.0
     );
 
+    mat3 covariance3D = mat3(
+        cov_row0.x, cov_row0.y, cov_row0.z,
+        cov_row0.y, cov_row1.x, cov_row1.y,
+        cov_row0.z, cov_row1.y, cov_row1.z
+    );
+
     mat3 R = transpose(mat3(view_matrix));
     R[0][1] = -R[0][1];
     R[1][0] = -R[1][0];
@@ -125,7 +132,7 @@ void main()
     // View-dependent color via spherical harmonics.
     vec3 ray_direction = normalize(splat_center - cam_pos);
     vColor.rgb = get_rgb(ray_direction);
-    vColor.a   = splat_color.a;
+    vColor.a   = splat_opacity;
     vPosition  = gl_Vertex.xy;
 
     gl_Position = vec4(
