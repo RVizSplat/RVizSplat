@@ -1,35 +1,32 @@
 #ifndef GSPLAT_RVIZ_TRIALS__SPLAT_HPP_
 #define GSPLAT_RVIZ_TRIALS__SPLAT_HPP_
 
-#include <OgreSimpleRenderable.h>
+#include <OgreRenderable.h>
 #include <OgreVector3.h>
 #include <OgreColourValue.h>
-#include <OgreGpuProgramParams.h>
+#include <OgreMaterial.h>
 #include <OgreCamera.h>
+#include <OgreGpuProgramParams.h>
 
 #include "gsplat_rviz_trials/visibility_control.hpp"
-
-namespace Ogre
-{
-class SceneManager;
-class SceneNode;
-}
 
 namespace gsplat_rviz_trials
 {
 
+class SplatCloud;
+
 /**
- * @brief A Gaussian Splat billboard backed by a raw Ogre VBO/IBO via SimpleRenderable.
+ * @brief One Gaussian splat — a pure Ogre::Renderable backed by a cloned material.
  *
- * Each instance owns a cloned material (for independent per-GPU uniforms) and a
- * child SceneNode used for position and camera-facing orientation.
+ * Geometry (the shared quad VBO/IBO) is owned by the parent SplatCloud and
+ * returned by reference from getRenderOperation().  This class only owns the
+ * per-instance material (and therefore the per-instance GPU uniform block).
  */
-class GSPLAT_RVIZ_TRIALS_PUBLIC Splat : public Ogre::SimpleRenderable
+class GSPLAT_RVIZ_TRIALS_PUBLIC Splat : public Ogre::Renderable
 {
 public:
   Splat(
-    Ogre::SceneManager * scene_manager,
-    Ogre::SceneNode * parent_node,
+    SplatCloud * cloud,
     const Ogre::Vector3 & position,
     const float covariance[6],
     const Ogre::ColourValue & color,
@@ -38,31 +35,31 @@ public:
 
   ~Splat() override;
 
-  /** Rotate the billboard to face the camera each frame. */
-  void update(Ogre::Camera * camera);
-
   void setCenter(const Ogre::Vector3 & position);
   void setColor(const Ogre::ColourValue & color);
   void setCovariance(float v11, float v12, float v13, float v22, float v23, float v33);
 
   /**
-   * @param sh     48 floats, coefficient-major RGB: sh[3*i..3*i+2] = (R,G,B) for basis i.
+   * @param sh       48 floats, coefficient-major RGB: sh[3*i..3*i+2] = (R,G,B) for basis i.
    * @param sh_degree  Highest SH degree present (0–3).
    */
   void setSphericalHarmonics(const float sh[48], int sh_degree);
 
-  // --- Ogre::SimpleRenderable interface ---
-  Ogre::Real getBoundingRadius() const override;
+  // --- Ogre::Renderable interface ---
+  const Ogre::MaterialPtr & getMaterial() const override { return material_; }
+  void getRenderOperation(Ogre::RenderOperation & op) override;
+  void getWorldTransforms(Ogre::Matrix4 * xform) const override;
   Ogre::Real getSquaredViewDepth(const Ogre::Camera * cam) const override;
+  const Ogre::LightList & getLights() const override;
 
 private:
-  void buildGeometry();
   Ogre::GpuProgramParametersSharedPtr getVertexParams();
 
-  Ogre::SceneNode * node_{nullptr};
-  float covariance_[6]{};
+  SplatCloud * cloud_;
+  Ogre::MaterialPtr material_;
   Ogre::Vector3 center_;
   Ogre::ColourValue color_;
+  float covariance_[6]{};
 };
 
 }  // namespace gsplat_rviz_trials

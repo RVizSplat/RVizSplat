@@ -2,7 +2,6 @@
 #define GSPLAT_RVIZ_TRIALS__DISPLAYS__GSPLAT_DISPLAY_HPP_
 
 #include <memory>
-#include <vector>
 
 #include "rviz_common/display.hpp"
 #include "rviz_common/properties/file_picker_property.hpp"
@@ -10,7 +9,7 @@
 
 namespace gsplat_rviz_trials
 {
-class Splat;
+class SplatCloud;
 
 namespace displays
 {
@@ -35,7 +34,7 @@ private Q_SLOTS:
 
 private:
   rviz_common::properties::FilePickerProperty * splat_path_property_;
-  std::vector<std::unique_ptr<Splat>> splats_;
+  std::unique_ptr<SplatCloud> splat_cloud_;
 };
 
 }  // namespace displays

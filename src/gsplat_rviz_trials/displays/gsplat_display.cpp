@@ -2,18 +2,15 @@
 
 #include <QFileDialog>
 
-#include <OgreCamera.h>
 #include <OgreSceneManager.h>
 #include <OgreSceneNode.h>
 
 #include "pluginlib/class_list_macros.hpp"
 #include "rviz_common/display_context.hpp"
 #include "rviz_common/properties/status_property.hpp"
-#include "rviz_common/view_controller.hpp"
-#include "rviz_common/view_manager.hpp"
 
 #include "gsplat_rviz_trials/ply_loader.hpp"
-#include "gsplat_rviz_trials/splat.hpp"
+#include "gsplat_rviz_trials/splat_cloud.hpp"
 
 namespace gsplat_rviz_trials
 {
@@ -35,7 +32,7 @@ GsplatDisplay::~GsplatDisplay() = default;
 void GsplatDisplay::onInitialize()
 {
   rviz_common::Display::onInitialize();
-  // Actual splats are created in onSplatPathChanged() when a file is selected.
+  splat_cloud_ = std::make_unique<SplatCloud>(scene_node_);
 }
 
 void GsplatDisplay::onEnable() {}
@@ -43,39 +40,31 @@ void GsplatDisplay::onDisable() {}
 
 void GsplatDisplay::update(
   std::chrono::nanoseconds /*wall_dt*/,
-  std::chrono::nanoseconds /*ros_dt*/)
-{
-  if (!context_ || !context_->getViewManager()) return;
-  rviz_common::ViewController * vc = context_->getViewManager()->getCurrent();
-  if (!vc) return;
-  Ogre::Camera * cam = vc->getCamera();
-  for (auto & splat : splats_) {
-    splat->update(cam);
-  }
-}
+  std::chrono::nanoseconds /*ros_dt*/) {}
 
 void GsplatDisplay::reset()
 {
   rviz_common::Display::reset();
-  splats_.clear();
+  if (splat_cloud_) {
+    splat_cloud_->clear();
+  }
 }
 
 void GsplatDisplay::onSplatPathChanged()
 {
-  // Guard: scene resources not yet ready before onInitialize().
-  if (!scene_manager_ || !scene_node_) return;
+  if (!scene_manager_ || !scene_node_ || !splat_cloud_) {
+    return;
+  }
+
+  splat_cloud_->clear();
 
   const QString path = splat_path_property_->getString();
   if (path.isEmpty()) {
     setStatus(
       rviz_common::properties::StatusProperty::Warn,
       "Splat File", "No file selected.");
-    splats_.clear();
     return;
   }
-
-  // Destroy previous scene objects before loading the new file.
-  splats_.clear();
 
   std::string error_msg;
   std::vector<GaussianData> gaussians = loadPly(path.toStdString(), error_msg);
@@ -87,15 +76,10 @@ void GsplatDisplay::onSplatPathChanged()
     return;
   }
 
-  // Create one Splat per gaussian; each clones its own material so GPU
-  // parameters are fully independent (see Splat constructor).
-  splats_.reserve(gaussians.size());
   for (const GaussianData & g : gaussians) {
-    splats_.push_back(std::make_unique<Splat>(
-      scene_manager_, scene_node_,
-      g.position, g.covariance, g.color,
-      g.sh, g.sh_degree));
+    splat_cloud_->addSplat(g.position, g.covariance, g.color, g.sh, g.sh_degree);
   }
+  scene_node_->needUpdate();
 
   setStatus(
     rviz_common::properties::StatusProperty::Ok,
