@@ -5,16 +5,12 @@
 
 #include <OgreSceneManager.h>
 #include <OgreSceneNode.h>
-#include <OgreEntity.h>
-#include <OgreSubEntity.h>
 #include <OgreMaterial.h>
 #include <OgreMaterialManager.h>
 #include <OgreTechnique.h>
-#include <OgreVector3.h>
-#include <OgreManualObject.h>
+#include <OgreHardwareBufferManager.h>
+#include <OgreVertexIndexData.h>
 #include <OgreGpuProgramParams.h>
-
-#include "rviz_rendering/objects/mesh_shape.hpp"
 
 namespace gsplat_rviz_trials
 {
@@ -26,7 +22,7 @@ static std::string makeUniqueMaterialName()
 }
 
 Splat::Splat(
-  Ogre::SceneManager * scene_manager,
+  Ogre::SceneManager * /*scene_manager*/,
   Ogre::SceneNode * parent_node,
   const Ogre::Vector3 & position,
   const float covariance[6],
@@ -34,71 +30,127 @@ Splat::Splat(
   const float sh[48],
   int sh_degree)
 {
-  mesh_shape_ = std::make_unique<rviz_rendering::MeshShape>(scene_manager, parent_node);
+  buildGeometry();
 
-  Ogre::ManualObject * mo = mesh_shape_->getManualObject();
-  mesh_shape_->beginTriangles();
-
-  // Define a larger quad (4x4) to ensure the Gaussian falloff has space
-  // We use UVs from 0 to 1
-  mo->position(-2.0f, -2.0f, 0.0f); mo->textureCoord(0.0f, 0.0f);
-  mo->position( 2.0f, -2.0f, 0.0f); mo->textureCoord(1.0f, 0.0f);
-  mo->position( 2.0f,  2.0f, 0.0f); mo->textureCoord(1.0f, 1.0f);
-  mo->position(-2.0f,  2.0f, 0.0f); mo->textureCoord(0.0f, 1.0f);
-
-  mesh_shape_->addTriangle(0, 1, 2);
-  mesh_shape_->addTriangle(0, 2, 3);
-  mesh_shape_->endTriangles();
-
-  // Clone the shared material so each Splat instance has its own GPU parameter set.
-  // Without cloning, all instances share the same parameter block and the last
-  // setNamedConstant() call wins, making every splat look identical.
+  // Clone the shared base material so each instance has independent GPU param storage.
   material_name_ = makeUniqueMaterialName();
   Ogre::MaterialPtr base = Ogre::MaterialManager::getSingleton().getByName(
     "gsplat_rviz_trials/GaussianSplat", "rviz_rendering");
-  base->clone(material_name_);
+  setMaterial(base->clone(material_name_));
 
-  if (mesh_shape_->getEntity()) {
-    mesh_shape_->getEntity()->setMaterialName(material_name_);
-  }
+  // Child node carries position and camera-facing orientation for this splat.
+  node_ = parent_node->createChildSceneNode();
+  node_->attachObject(this);
 
-  // Set initial parameters and sync with GPU
+  // Transparent objects must be in RENDER_QUEUE_TRANSPARENTS (95) so Ogre
+  // depth-sorts them back-to-front using getSquaredViewDepth before blending.
+  setRenderQueueGroup(95u);  // RENDER_QUEUE_TRANSPARENTS
+
+  // Local-space bounding box: quad spans ±2 in x/y, nearly flat in z.
+  mBox.setExtents(
+    Ogre::Vector3(-2.0f, -2.0f, -0.01f),
+    Ogre::Vector3( 2.0f,  2.0f,  0.01f));
+
   setCenter(position);
   setColor(color);
-  setCovariance(covariance[0], covariance[1], covariance[2], covariance[3], covariance[4], covariance[5]);
+  setCovariance(
+    covariance[0], covariance[1], covariance[2],
+    covariance[3], covariance[4], covariance[5]);
   setSphericalHarmonics(sh, sh_degree);
+}
+
+void Splat::buildGeometry()
+{
+  // Billboard quad: four corners at ±2 in x/y.
+  // gl_Vertex.xy in the vertex shader reads these as vPosition for Gaussian falloff.
+  static constexpr float kVerts[] = {
+    -2.0f, -2.0f, 0.0f,
+     2.0f, -2.0f, 0.0f,
+     2.0f,  2.0f, 0.0f,
+    -2.0f,  2.0f, 0.0f,
+  };
+  static constexpr uint16_t kIdx[] = {0, 1, 2, 0, 2, 3};
+
+  mRenderOp.operationType = Ogre::RenderOperation::OT_TRIANGLE_LIST;
+  mRenderOp.useIndexes = true;
+
+  // --- vertex data ---
+  mRenderOp.vertexData = new Ogre::VertexData();
+  mRenderOp.vertexData->vertexStart = 0;
+  mRenderOp.vertexData->vertexCount = 4;
+
+  mRenderOp.vertexData->vertexDeclaration->addElement(
+    0, 0, Ogre::VET_FLOAT3, Ogre::VES_POSITION);
+
+  auto & bm = Ogre::HardwareBufferManager::getSingleton();
+  auto vbuf = bm.createVertexBuffer(
+    3 * sizeof(float), 4,
+    Ogre::HardwareBuffer::HBU_STATIC_WRITE_ONLY);
+  vbuf->writeData(0, vbuf->getSizeInBytes(), kVerts, true);
+  mRenderOp.vertexData->vertexBufferBinding->setBinding(0, vbuf);
+
+  // --- index data ---
+  auto ibuf = bm.createIndexBuffer(
+    Ogre::HardwareIndexBuffer::IT_16BIT, 6,
+    Ogre::HardwareBuffer::HBU_STATIC_WRITE_ONLY);
+  ibuf->writeData(0, ibuf->getSizeInBytes(), kIdx, true);
+
+  mRenderOp.indexData = new Ogre::IndexData();
+  mRenderOp.indexData->indexBuffer = ibuf;
+  mRenderOp.indexData->indexCount = 6;
+  mRenderOp.indexData->indexStart = 0;
 }
 
 Splat::~Splat()
 {
-  // Remove the per-instance material clone to avoid leaking Ogre resources.
+  if (node_) {
+    node_->detachAllObjects();
+    node_->getCreator()->destroySceneNode(node_);
+    node_ = nullptr;
+  }
   if (!material_name_.empty()) {
     Ogre::MaterialManager::getSingleton().remove(material_name_);
   }
+  // RenderOperation holds raw pointers — must free manually (base class does not).
+  delete mRenderOp.vertexData;
+  mRenderOp.vertexData = nullptr;
+  delete mRenderOp.indexData;
+  mRenderOp.indexData = nullptr;
 }
 
-// Returns the vertex-program parameter set for this instance's cloned material.
+Ogre::Real Splat::getBoundingRadius() const
+{
+  return 2.0f * Ogre::Math::Sqrt(2.0f);  // diagonal of the ±2 quad
+}
+
+Ogre::Real Splat::getSquaredViewDepth(const Ogre::Camera * cam) const
+{
+  auto diff = mParentNode->_getDerivedPosition() - cam->getDerivedPosition();
+  return diff.squaredLength();
+}
+
 Ogre::GpuProgramParametersSharedPtr Splat::getVertexParams()
 {
-  if (!mesh_shape_ || !mesh_shape_->getEntity()) {
+  auto mat = getMaterial();
+  if (!mat) {
     return Ogre::GpuProgramParametersSharedPtr();
   }
-  Ogre::SubEntity * sub = mesh_shape_->getEntity()->getSubEntity(0);
-  return sub->getTechnique()->getPass(0)->getVertexProgramParameters();
+  return mat->getTechnique(0)->getPass(0)->getVertexProgramParameters();
 }
 
 void Splat::update(Ogre::Camera * camera)
 {
-  if (camera && mesh_shape_) {
-    mesh_shape_->setOrientation(camera->getDerivedOrientation());
+  if (camera && node_) {
+    node_->setOrientation(camera->getDerivedOrientation());
   }
 }
 
 void Splat::setCenter(const Ogre::Vector3 & position)
 {
   center_ = position;
-  mesh_shape_->setPosition(position);
-
+  if (node_) {
+    node_->setPosition(position);
+  }
   auto params = getVertexParams();
   if (params) {
     params->setNamedConstant("splat_center", center_);
@@ -108,8 +160,6 @@ void Splat::setCenter(const Ogre::Vector3 & position)
 void Splat::setColor(const Ogre::ColourValue & color)
 {
   color_ = color;
-  mesh_shape_->setColor(color.r, color.g, color.b, color.a);
-
   auto params = getVertexParams();
   if (params) {
     params->setNamedConstant("splat_opacity", color_.a);
@@ -123,20 +173,17 @@ void Splat::setCovariance(float v11, float v12, float v13, float v22, float v23,
 
   auto params = getVertexParams();
   if (params) {
-    Ogre::Vector3 row0(v11, v12, v13);
-    Ogre::Vector3 row1(v22, v23, v33);
-    params->setNamedConstant("cov_row0", row0);
-    params->setNamedConstant("cov_row1", row1);
+    params->setNamedConstant("cov_row0", Ogre::Vector3(v11, v12, v13));
+    params->setNamedConstant("cov_row1", Ogre::Vector3(v22, v23, v33));
   }
 }
 
 void Splat::setSphericalHarmonics(const float sh[48], int sh_degree)
 {
   auto params = getVertexParams();
-  if (!params) return;
-
-  // Upload 16 vec3s (48 floats) as coefficient-major RGB triples.
-  // Ogre interprets (count=16, multiple_of=3) as 16 groups of 3 floats → vec3[16].
+  if (!params) {
+    return;
+  }
   params->setNamedConstant("spherical_harmonics", sh, 16, 3);
   params->setNamedConstant("sh_degree", sh_degree);
 }
