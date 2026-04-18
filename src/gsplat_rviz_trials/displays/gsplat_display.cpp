@@ -11,6 +11,7 @@
 
 #include "gsplat_rviz_trials/ply_loader.hpp"
 #include "gsplat_rviz_trials/splat_cloud.hpp"
+#include "gsplat_rviz_trials/splat_gpu.hpp"
 
 namespace gsplat_rviz_trials
 {
@@ -67,7 +68,8 @@ void GsplatDisplay::onSplatPathChanged()
   }
 
   std::string error_msg;
-  std::vector<GaussianData> gaussians = loadPly(path.toStdString(), error_msg);
+  int sh_degree = 0;
+  std::vector<SplatGPU> gaussians = loadPly(path.toStdString(), error_msg, sh_degree);
 
   if (!error_msg.empty()) {
     setStatus(
@@ -76,15 +78,13 @@ void GsplatDisplay::onSplatPathChanged()
     return;
   }
 
-  for (const GaussianData & g : gaussians) {
-    splat_cloud_->addSplat(g.position, g.covariance, g.color, g.sh, g.sh_degree);
-  }
-  scene_node_->needUpdate();
+  const int count = static_cast<int>(gaussians.size());
+  splat_cloud_->setSplats(std::move(gaussians), sh_degree);
 
   setStatus(
     rviz_common::properties::StatusProperty::Ok,
     "Splat File",
-    QString("Loaded %1 gaussians").arg(static_cast<int>(gaussians.size())));
+    QString("Loaded %1 gaussians").arg(count));
 }
 
 }  // namespace displays

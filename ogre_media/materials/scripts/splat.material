@@ -5,7 +5,7 @@ material gsplat_rviz_trials/GaussianSplat
         pass
         {
             lighting off
-            scene_blend alpha_blend
+            scene_blend one one_minus_src_alpha
             depth_write off
             cull_hardware none
 

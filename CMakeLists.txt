@@ -22,6 +22,7 @@ find_package(rclcpp REQUIRED)
 find_package(rviz_common REQUIRED)
 find_package(rviz_rendering REQUIRED)
 find_package(rviz_ogre_vendor REQUIRED)
+find_package(GLEW REQUIRED)
 
 # Avoid find_package(QT NAMES Qt6 Qt5 ...) due to CMake's default ascending path resolution
 find_package(Qt6 QUIET COMPONENTS Widgets)
@@ -50,7 +51,6 @@ endforeach()
 set(gsplat_rviz_trials_source_files
   src/gsplat_rviz_trials/displays/gsplat_display.cpp
   src/gsplat_rviz_trials/ply_loader.cpp
-  src/gsplat_rviz_trials/splat.cpp
   src/gsplat_rviz_trials/splat_cloud.cpp
 )
 
@@ -70,6 +70,7 @@ target_link_libraries(gsplat_rviz_trials PUBLIC
   rviz_common::rviz_common
   rviz_ogre_vendor::OgreMain
   rviz_rendering::rviz_rendering
+  GLEW::GLEW
 )
 
 target_compile_definitions(gsplat_rviz_trials PRIVATE "GSPLAT_RVIZ_TRIALS_BUILDING_LIBRARY")
