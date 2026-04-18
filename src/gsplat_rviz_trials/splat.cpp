@@ -33,10 +33,9 @@ Splat::Splat(
   buildGeometry();
 
   // Clone the shared base material so each instance has independent GPU param storage.
-  material_name_ = makeUniqueMaterialName();
   Ogre::MaterialPtr base = Ogre::MaterialManager::getSingleton().getByName(
     "gsplat_rviz_trials/GaussianSplat", "rviz_rendering");
-  setMaterial(base->clone(material_name_));
+  setMaterial(base->clone(makeUniqueMaterialName()));
 
   // Child node carries position and camera-facing orientation for this splat.
   node_ = parent_node->createChildSceneNode();
@@ -108,8 +107,9 @@ Splat::~Splat()
     node_->getCreator()->destroySceneNode(node_);
     node_ = nullptr;
   }
-  if (!material_name_.empty()) {
-    Ogre::MaterialManager::getSingleton().remove(material_name_);
+  // Use the ResourcePtr overload so the lookup is by handle — no group name needed.
+  if (auto mat = getMaterial()) {
+    Ogre::MaterialManager::getSingleton().remove(mat);
   }
   // RenderOperation holds raw pointers — must free manually (base class does not).
   delete mRenderOp.vertexData;

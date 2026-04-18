@@ -1,8 +1,6 @@
 #ifndef GSPLAT_RVIZ_TRIALS__SPLAT_HPP_
 #define GSPLAT_RVIZ_TRIALS__SPLAT_HPP_
 
-#include <string>
-
 #include <OgreSimpleRenderable.h>
 #include <OgreVector3.h>
 #include <OgreColourValue.h>
@@ -62,7 +60,6 @@ private:
   Ogre::GpuProgramParametersSharedPtr getVertexParams();
 
   Ogre::SceneNode * node_{nullptr};
-  std::string material_name_;
   float covariance_[6]{};
   Ogre::Vector3 center_;
   Ogre::ColourValue color_;
