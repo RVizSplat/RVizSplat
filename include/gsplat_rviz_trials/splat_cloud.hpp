@@ -76,7 +76,8 @@ private:
   void buildQuadGeometry();
   void destroyTBO();
   void uploadTBO();       // must be called with GL context current
-  void buildIndexVBO();   // identity-sorted index buffer
+  void buildIndexVBO();   // allocates the per-instance index VBO
+  void sortSplats();      // depth-sorts and uploads index VBO every frame
 
   Ogre::MaterialPtr material_;
   Ogre::RenderOperation render_op_;
@@ -93,6 +94,12 @@ private:
   uint32_t tbo_tex_ = 0;
 
   Ogre::HardwareVertexBufferSharedPtr index_vbo_;  // per-instance sorted indices
+
+  // Sorting state — persists between frames so pdqsort sees near-sorted input
+  std::vector<Ogre::Vector3> centers_;      // splat centres (cache-friendly, separate from TBO data)
+  std::vector<float>         depth_keys_;   // depth per original splat index
+  std::vector<uint32_t>      sort_indices_; // sorted permutation, kept from last frame
+  std::vector<float>         upload_buf_;   // float cast of sort_indices_ for VBO upload
 };
 
 }  // namespace gsplat_rviz_trials

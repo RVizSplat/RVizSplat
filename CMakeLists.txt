@@ -22,6 +22,7 @@ find_package(rclcpp REQUIRED)
 find_package(rviz_common REQUIRED)
 find_package(rviz_rendering REQUIRED)
 find_package(rviz_ogre_vendor REQUIRED)
+find_package(Boost REQUIRED)
 find_package(GLEW REQUIRED)
 
 # Avoid find_package(QT NAMES Qt6 Qt5 ...) due to CMake's default ascending path resolution
@@ -71,6 +72,7 @@ target_link_libraries(gsplat_rviz_trials PUBLIC
   rviz_ogre_vendor::OgreMain
   rviz_rendering::rviz_rendering
   GLEW::GLEW
+  Boost::boost
 )
 
 target_compile_definitions(gsplat_rviz_trials PRIVATE "GSPLAT_RVIZ_TRIALS_BUILDING_LIBRARY")

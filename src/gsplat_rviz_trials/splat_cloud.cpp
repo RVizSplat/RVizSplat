@@ -5,6 +5,9 @@
 
 #include <numeric>
 
+#include <boost/sort/sort.hpp>
+
+#include <OgreCamera.h>
 #include <OgreHardwareBufferManager.h>
 #include <OgreMaterialManager.h>
 #include <OgreRenderQueue.h>
@@ -12,6 +15,7 @@
 #include <OgreSceneNode.h>
 #include <OgreTechnique.h>
 #include <OgreVertexIndexData.h>
+#include <OgreViewport.h>
 
 namespace gsplat_rviz_trials
 {
@@ -161,6 +165,22 @@ void SplatCloud::setSplats(std::vector<SplatGPU> splats, int sh_degree)
 
   buildIndexVBO();
 
+  // Extract centres into a compact array for cache-friendly depth computation each frame.
+  // sort_indices_ is intentionally NOT reset after the first load so that subsequent calls
+  // (e.g. reload) start from a fresh identity order; pdqsort exploits the previous frame's
+  // order between calls to setSplats(), not across them.
+  centers_.resize(splat_count_);
+  for (uint32_t i = 0; i < splat_count_; i++) {
+    centers_[i] = Ogre::Vector3(
+      pending_splats_[i].center[0],
+      pending_splats_[i].center[1],
+      pending_splats_[i].center[2]);
+  }
+  depth_keys_.resize(splat_count_);
+  sort_indices_.resize(splat_count_);
+  std::iota(sort_indices_.begin(), sort_indices_.end(), 0u);
+  upload_buf_.resize(splat_count_);
+
   if (auto * node = getParentSceneNode()) {
     node->needUpdate();
   }
@@ -175,6 +195,10 @@ void SplatCloud::clear()
   destroyTBO();
   index_vbo_.reset();
   bounds_.setNull();
+  centers_.clear();
+  depth_keys_.clear();
+  sort_indices_.clear();
+  upload_buf_.clear();
 
   if (auto * node = getParentSceneNode()) {
     node->needUpdate();
@@ -193,7 +217,40 @@ Ogre::Real SplatCloud::getBoundingRadius() const
 void SplatCloud::_updateRenderQueue(Ogre::RenderQueue * queue)
 {
   if (splat_count_ == 0) return;
+  sortSplats();
   queue->addRenderable(this, 95u, mRenderQueuePriority);
+}
+
+// ── Sorting ───────────────────────────────────────────────────────────────────
+
+void SplatCloud::sortSplats()
+{
+  auto * vp = scene_manager_->getCurrentViewport();
+  if (!vp) return;
+  const Ogre::Camera * cam = vp->getCamera();
+  if (!cam) return;
+
+  const Ogre::Vector3 fwd = cam->getDerivedDirection();
+
+  // Sequential depth computation — centres_ is a compact array so this is cache-friendly.
+  for (uint32_t i = 0; i < splat_count_; i++) {
+    depth_keys_[i] = fwd.dotProduct(centers_[i]);
+  }
+
+  // sort_indices_ retains the previous frame's order so pdqsort only fixes
+  // the inversions caused by the camera movement (near O(n) for small drags).
+  boost::sort::pdqsort(
+    sort_indices_.begin(), sort_indices_.end(),
+    [this](uint32_t a, uint32_t b) {
+      return depth_keys_[a] > depth_keys_[b];  // descending = back-to-front
+    });
+
+  // Cast to float for the per-instance VBO attribute (float is exact for N < 2^24).
+  for (uint32_t i = 0; i < splat_count_; i++) {
+    upload_buf_[i] = static_cast<float>(sort_indices_[i]);
+  }
+
+  index_vbo_->writeData(0, splat_count_ * sizeof(float), upload_buf_.data(), false);
 }
 
 void SplatCloud::visitRenderables(Ogre::Renderable::Visitor * visitor, bool /*debug*/)
