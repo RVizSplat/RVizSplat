@@ -8,7 +8,7 @@ layout(location = 8) in float uv0;
 uniform samplerBuffer u_splats;   // GL_RGBA32F TBO, 19 texels per splat
 uniform mat4          view_matrix;
 uniform mat4          projectionMatrix;
-uniform vec3          cam_pos;
+uniform vec3          cam_view_dir;
 uniform int           sh_degree;
 
 out vec4 vColor;
@@ -100,8 +100,8 @@ void main()
 
     // ── EWA splatting: project 3D covariance → 2D screen covariance ──────────
     mat3 J = mat3(
-        projectionMatrix[0][0] / camspace.z, 0.0,
-        -(projectionMatrix[0][0] * camspace.x) / (camspace.z * camspace.z),
+        -projectionMatrix[0][0] / camspace.z, 0.0,
+        (projectionMatrix[0][0] * camspace.x) / (camspace.z * camspace.z),
         0.0, -projectionMatrix[1][1] / camspace.z,
         (projectionMatrix[1][1] * camspace.y) / (camspace.z * camspace.z),
         0.0, 0.0, 0.0
@@ -114,8 +114,6 @@ void main()
     );
 
     mat3 R   = transpose(mat3(view_matrix));
-    R[0][1]  = -R[0][1];
-    R[1][0]  = -R[1][0];
     mat3 T   = R * J;
     mat3 cov = transpose(T) * cov3d * T;
 
@@ -127,12 +125,11 @@ void main()
     float lambda1 = mid + radius;
     float lambda2 = mid - radius;
     vec2 diag = normalize(vec2(od, lambda1 - d1));
-    vec2 v1   = sqrt(max(lambda1, 0.0)) * diag;
-    vec2 v2   = sqrt(max(lambda2, 0.0)) * vec2(diag.y, -diag.x);
+    vec2 v1   = sqrt(max(2. * lambda1, 0.0)) * diag;
+    vec2 v2   = sqrt(max(2. * lambda2, 0.0)) * vec2(diag.y, -diag.x);
 
     // ── SH color ──────────────────────────────────────────────────────────────
-    vec3 ray_dir = normalize(center - cam_pos);
-    vColor   = vec4(evalSH(base, ray_dir), alpha);
+    vColor   = vec4(evalSH(base, cam_view_dir), alpha);
     vPosition = vertex;
 
     gl_Position = vec4(
