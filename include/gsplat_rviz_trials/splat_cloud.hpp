@@ -92,6 +92,7 @@ private:
   bool upload_pending_ = false;
   int max_sh_degree_    = 0;  // highest degree available in the loaded PLY data
   int active_sh_degree_ = 0;  // degree currently sent to the shader (user-controlled)
+  int texels_per_splat_ = 0;  // 3 + (active_sh_degree_+1)², updated on each TBO upload
   uint32_t splat_count_ = 0;
 
   // Raw GL handles (GLuint = uint32_t)

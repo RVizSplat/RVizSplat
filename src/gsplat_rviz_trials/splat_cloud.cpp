@@ -23,9 +23,6 @@ namespace gsplat_rviz_trials
 
 static const Ogre::String MOT_SPLAT_CLOUD = "SplatCloud";
 
-// Each splat = 19 GL_RGBA32F texels (304 bytes / 16 bytes per texel).
-static constexpr int kTexelsPerSplat = 19;
-
 SplatCloud::SplatCloud(Ogre::SceneNode * parent_node)
 {
   scene_manager_ = parent_node->getCreator();
@@ -112,12 +109,31 @@ void SplatCloud::uploadTBO()
   destroyTBO();
   if (pending_splats_.empty()) return;
 
+  const int num_sh      = (active_sh_degree_ + 1) * (active_sh_degree_ + 1);
+  texels_per_splat_     = 3 + num_sh;
+
+  // Pack only the active SH coefficients — one vec4 (16 B) per texel.
+  std::vector<float> packed(static_cast<size_t>(splat_count_) * texels_per_splat_ * 4);
+  for (uint32_t i = 0; i < splat_count_; i++) {
+    const SplatGPU & s = pending_splats_[i];
+    float * d = packed.data() + static_cast<size_t>(i) * texels_per_splat_ * 4;
+    d[0]  = s.center[0]; d[1]  = s.center[1]; d[2]  = s.center[2]; d[3]  = s.alpha;
+    d[4]  = s.covA[0];   d[5]  = s.covA[1];   d[6]  = s.covA[2];   d[7]  = 0.0f;
+    d[8]  = s.covB[0];   d[9]  = s.covB[1];   d[10] = s.covB[2];   d[11] = 0.0f;
+    for (int c = 0; c < num_sh; c++) {
+      d[12 + c * 4]     = s.sh[c][0];
+      d[12 + c * 4 + 1] = s.sh[c][1];
+      d[12 + c * 4 + 2] = s.sh[c][2];
+      d[12 + c * 4 + 3] = 0.0f;
+    }
+  }
+
   glGenBuffers(1, &tbo_buf_);
   glBindBuffer(GL_TEXTURE_BUFFER, tbo_buf_);
   glBufferData(
     GL_TEXTURE_BUFFER,
-    static_cast<GLsizeiptr>(pending_splats_.size() * sizeof(SplatGPU)),
-    pending_splats_.data(),
+    static_cast<GLsizeiptr>(packed.size() * sizeof(float)),
+    packed.data(),
     GL_STATIC_DRAW);
   glBindBuffer(GL_TEXTURE_BUFFER, 0);
 
@@ -155,7 +171,7 @@ void SplatCloud::setSplats(std::vector<SplatGPU> splats, int sh_degree)
 {
   splat_count_      = static_cast<uint32_t>(splats.size());
   max_sh_degree_    = sh_degree;
-  active_sh_degree_ = sh_degree;
+  active_sh_degree_ = std::min(1, sh_degree);
   pending_splats_   = std::move(splats);
   upload_pending_ = true;
 
@@ -193,6 +209,7 @@ void SplatCloud::clear()
   splat_count_      = 0;
   max_sh_degree_    = 0;
   active_sh_degree_ = 0;
+  texels_per_splat_ = 0;
   pending_splats_.clear();
   upload_pending_ = false;
   destroyTBO();
@@ -210,7 +227,10 @@ void SplatCloud::clear()
 
 void SplatCloud::setShDegree(int d)
 {
-  active_sh_degree_ = std::clamp(d, 0, max_sh_degree_);
+  const int clamped = std::clamp(d, 0, max_sh_degree_);
+  if (clamped == active_sh_degree_) return;
+  active_sh_degree_ = clamped;
+  upload_pending_   = true;  // triggers re-pack + re-upload in notifyRenderSingleObject
 }
 
 // ── MovableObject ─────────────────────────────────────────────────────────────
@@ -309,6 +329,7 @@ void SplatCloud::notifyRenderSingleObject(
   auto params = material_->getTechnique(0)->getPass(0)->getVertexProgramParameters();
   if (params) {
     params->setNamedConstant("sh_degree", active_sh_degree_);
+    params->setNamedConstant("u_stride",  texels_per_splat_);
   }
 
   if (tbo_tex_) {

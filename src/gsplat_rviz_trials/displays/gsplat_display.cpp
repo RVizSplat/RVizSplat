@@ -92,7 +92,7 @@ void GsplatDisplay::onSplatPathChanged()
   splat_cloud_->setSplats(std::move(gaussians), sh_degree);
 
   sh_degree_property_->setMax(sh_degree);
-  sh_degree_property_->setValue(sh_degree);
+  sh_degree_property_->setValue(std::min(1, sh_degree));
 
   setStatus(
     rviz_common::properties::StatusProperty::Ok,

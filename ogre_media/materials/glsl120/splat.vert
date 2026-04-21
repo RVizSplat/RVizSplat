@@ -5,11 +5,12 @@ layout(location = 0) in vec2 vertex;
 // Source 1: sorted splat index — per-instance (divisor = 1)
 layout(location = 8) in float uv0;
 
-uniform samplerBuffer u_splats;   // GL_RGBA32F TBO, 19 texels per splat
+uniform samplerBuffer u_splats;   // GL_RGBA32F TBO, u_stride texels per splat
 uniform mat4          view_matrix;
 uniform mat4          projectionMatrix;
 uniform vec3          cam_view_dir;
 uniform int           sh_degree;
+uniform int           u_stride;   // texels per splat = 3 + (sh_degree+1)²
 
 out vec4 vColor;
 out vec2 vPosition;
@@ -76,7 +77,7 @@ vec3 evalSH(int base, vec3 d)
 void main()
 {
     int splat_id = int(uv0);
-    int base     = splat_id * 19;
+    int base     = splat_id * u_stride;
 
     vec4 t0  = texelFetch(u_splats, base + 0);
     vec3 center = t0.xyz;
