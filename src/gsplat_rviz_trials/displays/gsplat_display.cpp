@@ -26,6 +26,14 @@ GsplatDisplay::GsplatDisplay()
     this, SLOT(onSplatPathChanged()),
     this,
     QFileDialog::ExistingFile);
+
+  sh_degree_property_ = new rviz_common::properties::IntProperty(
+    "SH Degree", 0,
+    "Spherical harmonics degree used for view-dependent colour (0 = DC only). "
+    "Lower values are faster; maximum is set by the loaded PLY file.",
+    this, SLOT(onShDegreeChanged()), this);
+  sh_degree_property_->setMin(0);
+  sh_degree_property_->setMax(0);
 }
 
 GsplatDisplay::~GsplatDisplay() = default;
@@ -49,6 +57,8 @@ void GsplatDisplay::reset()
   if (splat_cloud_) {
     splat_cloud_->clear();
   }
+  sh_degree_property_->setMax(0);
+  sh_degree_property_->setValue(0);
 }
 
 void GsplatDisplay::onSplatPathChanged()
@@ -81,10 +91,20 @@ void GsplatDisplay::onSplatPathChanged()
   const int count = static_cast<int>(gaussians.size());
   splat_cloud_->setSplats(std::move(gaussians), sh_degree);
 
+  sh_degree_property_->setMax(sh_degree);
+  sh_degree_property_->setValue(std::min(1, sh_degree));
+
   setStatus(
     rviz_common::properties::StatusProperty::Ok,
     "Splat File",
     QString("Loaded %1 gaussians").arg(count));
+}
+
+void GsplatDisplay::onShDegreeChanged()
+{
+  if (splat_cloud_) {
+    splat_cloud_->setShDegree(sh_degree_property_->getInt());
+  }
 }
 
 }  // namespace displays

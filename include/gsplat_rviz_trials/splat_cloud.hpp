@@ -49,6 +49,10 @@ public:
   void setSplats(std::vector<SplatGPU> splats, int sh_degree);
   void clear();
 
+  // Change the active SH degree at runtime (clamped to [0, max available]).
+  void setShDegree(int d);
+  int  getMaxShDegree() const { return max_sh_degree_; }
+
   // ── Ogre::MovableObject ────────────────────────────────────────────
   const Ogre::String & getMovableType() const override;
   const Ogre::AxisAlignedBox & getBoundingBox() const override { return bounds_; }
@@ -86,7 +90,9 @@ private:
 
   std::vector<SplatGPU> pending_splats_;
   bool upload_pending_ = false;
-  int sh_degree_ = 0;
+  int max_sh_degree_    = 0;  // highest degree available in the loaded PLY data
+  int active_sh_degree_ = 0;  // degree currently sent to the shader (user-controlled)
+  int texels_per_splat_ = 0;  // 3 + (active_sh_degree_+1)², updated on each TBO upload
   uint32_t splat_count_ = 0;
 
   // Raw GL handles (GLuint = uint32_t)
