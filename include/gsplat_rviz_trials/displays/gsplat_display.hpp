@@ -5,6 +5,7 @@
 
 #include "rviz_common/display.hpp"
 #include "rviz_common/properties/file_picker_property.hpp"
+#include "rviz_common/properties/int_property.hpp"
 #include "gsplat_rviz_trials/visibility_control.hpp"
 
 namespace gsplat_rviz_trials
@@ -31,9 +32,11 @@ protected:
 
 private Q_SLOTS:
   void onSplatPathChanged();
+  void onShDegreeChanged();
 
 private:
   rviz_common::properties::FilePickerProperty * splat_path_property_;
+  rviz_common::properties::IntProperty *        sh_degree_property_;
   std::unique_ptr<SplatCloud> splat_cloud_;
 };
 

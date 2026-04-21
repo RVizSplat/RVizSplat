@@ -3,6 +3,7 @@
 // GLEW must be included before any other OpenGL header.
 #include <GL/glew.h>
 
+#include <algorithm>
 #include <numeric>
 
 #include <boost/sort/sort.hpp>
@@ -152,9 +153,10 @@ void SplatCloud::buildIndexVBO()
 
 void SplatCloud::setSplats(std::vector<SplatGPU> splats, int sh_degree)
 {
-  splat_count_    = static_cast<uint32_t>(splats.size());
-  sh_degree_      = sh_degree;
-  pending_splats_ = std::move(splats);
+  splat_count_      = static_cast<uint32_t>(splats.size());
+  max_sh_degree_    = sh_degree;
+  active_sh_degree_ = sh_degree;
+  pending_splats_   = std::move(splats);
   upload_pending_ = true;
 
   // Rebuild bounds from splat centres
@@ -188,8 +190,9 @@ void SplatCloud::setSplats(std::vector<SplatGPU> splats, int sh_degree)
 
 void SplatCloud::clear()
 {
-  splat_count_ = 0;
-  sh_degree_   = 0;
+  splat_count_      = 0;
+  max_sh_degree_    = 0;
+  active_sh_degree_ = 0;
   pending_splats_.clear();
   upload_pending_ = false;
   destroyTBO();
@@ -203,6 +206,11 @@ void SplatCloud::clear()
   if (auto * node = getParentSceneNode()) {
     node->needUpdate();
   }
+}
+
+void SplatCloud::setShDegree(int d)
+{
+  active_sh_degree_ = std::clamp(d, 0, max_sh_degree_);
 }
 
 // ── MovableObject ─────────────────────────────────────────────────────────────
@@ -296,12 +304,11 @@ void SplatCloud::notifyRenderSingleObject(
   if (upload_pending_) {
     uploadTBO();
     upload_pending_ = false;
+  }
 
-    // Set sh_degree uniform on the shared material now that context is current
-    auto params = material_->getTechnique(0)->getPass(0)->getVertexProgramParameters();
-    if (params) {
-      params->setNamedConstant("sh_degree", sh_degree_);
-    }
+  auto params = material_->getTechnique(0)->getPass(0)->getVertexProgramParameters();
+  if (params) {
+    params->setNamedConstant("sh_degree", active_sh_degree_);
   }
 
   if (tbo_tex_) {
