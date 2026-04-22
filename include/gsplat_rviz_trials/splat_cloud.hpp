@@ -1,6 +1,8 @@
 #ifndef GSPLAT_RVIZ_TRIALS__SPLAT_CLOUD_HPP_
 #define GSPLAT_RVIZ_TRIALS__SPLAT_CLOUD_HPP_
 
+#include <array>
+#include <chrono>
 #include <cstdint>
 #include <vector>
 
@@ -112,11 +114,18 @@ private:
   std::vector<float>         upload_buf_;   // float cast of sort_indices_ for VBO upload
 
 #ifdef GSPLAT_USE_CUDA
-  bool         use_cuda_                  = false;
-  bool         cuda_registration_pending_ = false;
-  CudaSorter   cuda_sorter_;
-  void *       cuda_vbo_resource_         = nullptr;  // opaque cudaGraphicsResource_t
+  bool       use_cuda_   = false;
+  CudaSorter cuda_sorter_;
 #endif
+
+  // Sort timing — 60-sample circular buffer, logged every 2 seconds
+  static constexpr int kStatWindow = 60;
+  std::array<double, kStatWindow> sort_times_ms_{};
+  int    stat_head_  = 0;
+  int    stat_count_ = 0;
+  double stat_sum_   = 0.0;
+  std::chrono::steady_clock::time_point last_stats_log_;
+  void recordSortTime(double sort_ms, const char * method);
 };
 
 }  // namespace gsplat_rviz_trials

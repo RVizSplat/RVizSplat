@@ -64,8 +64,7 @@ if(CUDAToolkit_FOUND)
     set(CMAKE_CUDA_STANDARD_REQUIRED ON)
   endif()
   list(APPEND gsplat_rviz_trials_source_files
-    src/gsplat_rviz_trials/cuda_sorter.cu
-    src/gsplat_rviz_trials/cuda_gl_bridge.cpp)
+    src/gsplat_rviz_trials/cuda_sorter.cu)
 else()
   message(WARNING "gsplat [INFO]: CUDA toolkit not found — using CPU pdqsort fallback")
 endif()
@@ -95,10 +94,6 @@ target_compile_definitions(gsplat_rviz_trials PRIVATE "GSPLAT_RVIZ_TRIALS_BUILDI
 if(CUDAToolkit_FOUND)
   target_compile_definitions(gsplat_rviz_trials PRIVATE GSPLAT_USE_CUDA)
   target_link_libraries(gsplat_rviz_trials PRIVATE CUDA::cudart)
-  find_path(OGRE_GL3PLUS_INCLUDE_DIR OgreGL3PlusHardwareVertexBuffer.h
-    PATH_SUFFIXES OGRE/RenderSystems/GL3Plus
-    REQUIRED)
-  target_include_directories(gsplat_rviz_trials PRIVATE ${OGRE_GL3PLUS_INCLUDE_DIR})
 endif()
 
 register_rviz_ogre_media_exports(DIRECTORIES 
