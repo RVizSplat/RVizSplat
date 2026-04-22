@@ -42,7 +42,7 @@ namespace gsplat_rviz_trials
 //   quad VBO  (source 0, 4 verts, ±2 corners)  ─┐
 //   index VBO (source 1, N floats, sorted idx) ─┤─► glDrawElementsInstanced(N)
 //   IBO       (6 indices, two triangles)        ─┘
-//   TBO       (N × 19 RGBA32F texels = SplatGPU data)
+//   TBO       (N × 2 RGBA32UI texels = packed SplatGPU data, 32 B/splat)
 class GSPLAT_RVIZ_TRIALS_PUBLIC SplatCloud
   : public Ogre::MovableObject,
     public Ogre::Renderable,
@@ -102,7 +102,7 @@ private:
   bool upload_pending_ = false;
   int max_sh_degree_    = 0;  // highest degree available in the loaded PLY data
   int active_sh_degree_ = 0;  // degree currently sent to the shader (user-controlled)
-  int texels_per_splat_ = 0;  // 3 + (active_sh_degree_+1)², updated on each TBO upload
+  int texels_per_splat_ = 0;  // compact base TBO = 2 uvec4 texels/splat (32 B)
   uint32_t splat_count_ = 0;
 
   // Raw GL handles (GLuint = uint32_t)
