@@ -186,8 +186,11 @@ void SplatCloud::buildQuadGeometry()
 
 void SplatCloud::destroyTBO()
 {
-  if (tbo_tex_) { glDeleteTextures(1, &tbo_tex_); tbo_tex_ = 0; }
-  if (tbo_buf_) { glDeleteBuffers(1, &tbo_buf_);  tbo_buf_ = 0; }
+  if (tbo_tex_)    { glDeleteTextures(1, &tbo_tex_);    tbo_tex_ = 0; }
+  if (tbo_buf_)    { glDeleteBuffers(1, &tbo_buf_);     tbo_buf_ = 0; }
+  if (sh_tbo_tex_) { glDeleteTextures(1, &sh_tbo_tex_); sh_tbo_tex_ = 0; }
+  if (sh_tbo_buf_) { glDeleteBuffers(1, &sh_tbo_buf_);  sh_tbo_buf_ = 0; }
+  sh_coeffs_per_splat_ = 0;
 }
 
 void SplatCloud::uploadTBO()
@@ -229,6 +232,42 @@ void SplatCloud::uploadTBO()
   glBindTexture(GL_TEXTURE_BUFFER, tbo_tex_);
   glTexBuffer(GL_TEXTURE_BUFFER, GL_RGBA32UI, tbo_buf_);
   glBindTexture(GL_TEXTURE_BUFFER, 0);
+
+  // ── Optional SH TBO for non-DC coefficients (GL_RGBA16F, 8 B/coeff) ──
+  sh_coeffs_per_splat_ =
+    (active_sh_degree_ + 1) * (active_sh_degree_ + 1) - 1;  // excludes DC
+  if (sh_coeffs_per_splat_ > 0) {
+    // Each non-DC coefficient packs into one RGBA16F texel: (R, G, B, 0).
+    // Layout is [splat0_c1, splat0_c2, …, splat1_c1, splat1_c2, …].
+    std::vector<uint16_t> sh_packed(
+      static_cast<size_t>(splat_count_) * sh_coeffs_per_splat_ * 4);
+    for (uint32_t i = 0; i < splat_count_; ++i) {
+      const SplatGPU & s = pending_splats_[i];
+      uint16_t * d = sh_packed.data() +
+        static_cast<size_t>(i) * sh_coeffs_per_splat_ * 4;
+      for (int c = 0; c < sh_coeffs_per_splat_; ++c) {
+        // SplatGPU::sh[0] is DC; non-DC starts at sh[1].
+        d[c * 4 + 0] = floatToHalf(s.sh[c + 1][0]);
+        d[c * 4 + 1] = floatToHalf(s.sh[c + 1][1]);
+        d[c * 4 + 2] = floatToHalf(s.sh[c + 1][2]);
+        d[c * 4 + 3] = 0;
+      }
+    }
+
+    glGenBuffers(1, &sh_tbo_buf_);
+    glBindBuffer(GL_TEXTURE_BUFFER, sh_tbo_buf_);
+    glBufferData(
+      GL_TEXTURE_BUFFER,
+      static_cast<GLsizeiptr>(sh_packed.size() * sizeof(uint16_t)),
+      sh_packed.data(),
+      GL_STATIC_DRAW);
+    glBindBuffer(GL_TEXTURE_BUFFER, 0);
+
+    glGenTextures(1, &sh_tbo_tex_);
+    glBindTexture(GL_TEXTURE_BUFFER, sh_tbo_tex_);
+    glTexBuffer(GL_TEXTURE_BUFFER, GL_RGBA16F, sh_tbo_buf_);
+    glBindTexture(GL_TEXTURE_BUFFER, 0);
+  }
 }
 
 // ── Per-instance index VBO ────────────────────────────────────────────────────
@@ -269,7 +308,7 @@ void SplatCloud::setSplats(std::vector<SplatGPU> splats, int sh_degree)
 
   splat_count_      = static_cast<uint32_t>(splats.size());
   max_sh_degree_    = sh_degree;
-  active_sh_degree_ = 0;  // lean-mode Phase 1: DC only (baked into base TBO)
+  active_sh_degree_ = std::min(1, sh_degree);  // default: SH1 if available, else 0
   pending_splats_   = std::move(splats);
   upload_pending_ = true;
 
@@ -564,10 +603,21 @@ void SplatCloud::notifyRenderSingleObject(
     upload_pending_ = false;
   }
 
+  auto params = material_->getTechnique(0)->getPass(0)->getVertexProgramParameters();
+  if (params) {
+    params->setNamedConstant("sh_degree", active_sh_degree_);
+  }
+
   if (tbo_tex_) {
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_BUFFER, tbo_tex_);
   }
+
+  // Bind SH TBO on unit 1 when it exists; otherwise leave whatever is there —
+  // the shader only samples it when sh_degree > 0.
+  glActiveTexture(GL_TEXTURE1);
+  glBindTexture(GL_TEXTURE_BUFFER, sh_tbo_tex_);
+  glActiveTexture(GL_TEXTURE0);
 }
 
 }  // namespace gsplat_rviz_trials

@@ -108,6 +108,9 @@ private:
   // Raw GL handles (GLuint = uint32_t)
   uint32_t tbo_buf_ = 0;
   uint32_t tbo_tex_ = 0;
+  uint32_t sh_tbo_buf_ = 0;   // RGBA16F TBO of non-DC SH coefficients (empty when active_sh_degree_ == 0)
+  uint32_t sh_tbo_tex_ = 0;
+  int      sh_coeffs_per_splat_ = 0;   // (active_sh_degree_+1)² - 1
 
   Ogre::HardwareVertexBufferSharedPtr index_vbo_;  // per-instance sorted indices
 

@@ -91,11 +91,8 @@ void GsplatDisplay::onSplatPathChanged()
   const int count = static_cast<int>(gaussians.size());
   splat_cloud_->setSplats(std::move(gaussians), sh_degree);
 
-  // lean-mode Phase 1: only DC (SH0) is rendered; higher orders will come back
-  // once the SH TBO is wired up in Phase 2.
-  (void)sh_degree;
-  sh_degree_property_->setMax(0);
-  sh_degree_property_->setValue(0);
+  sh_degree_property_->setMax(sh_degree);
+  sh_degree_property_->setValue(std::min(1, sh_degree));
 
   setStatus(
     rviz_common::properties::StatusProperty::Ok,

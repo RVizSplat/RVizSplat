@@ -11,14 +11,75 @@ layout(location = 8) in float uv0;
 //   texel 0.w   = packHalf2x16(cov00, cov01)
 //   texel 1.x   = packHalf2x16(cov02, cov11)
 //   texel 1.y   = packHalf2x16(cov12, cov22)
-//   texel 1.z   = packUnorm4x8(r, g, b, a)
-//   texel 1.w   = reserved (SH index, used in SH>=1 path)
+//   texel 1.z   = packUnorm4x8(r, g, b, a)   ← DC pre-baked to uint8
+//   texel 1.w   = reserved
 uniform usamplerBuffer u_splats;
-uniform mat4           view_matrix;
-uniform mat4           projectionMatrix;
+
+// Optional SH TBO: (sh_degree+1)² - 1 RGBA16F texels per splat, non-DC coeffs.
+// Bound only when sh_degree > 0; shader avoids sampling it otherwise.
+uniform samplerBuffer u_sh;
+
+uniform mat4          view_matrix;
+uniform mat4          projectionMatrix;
+uniform vec3          cam_view_dir;
+uniform int           sh_degree;
 
 out vec4 vColor;
 out vec2 vPosition;
+
+// ── SH constants (Y_l^m coefficients) ──────────────────────────────────────
+const float SH_C1    =  0.4886025119029199;
+const float SH_C2_0  =  1.0925484305920792;
+const float SH_C2_1  = -1.0925484305920792;
+const float SH_C2_2  =  0.31539156525252005;
+const float SH_C2_3  = -1.0925484305920792;
+const float SH_C2_4  =  0.5462742152960396;
+const float SH_C3_0  = -0.5900435899266435;
+const float SH_C3_1  =  2.890611442640554;
+const float SH_C3_2  = -0.4570457994644658;
+const float SH_C3_3  =  0.3731763325901154;
+const float SH_C3_4  = -0.4570457994644658;
+const float SH_C3_5  =  1.445305721320277;
+const float SH_C3_6  = -0.5900435899266435;
+
+// Number of non-DC SH coefficients for a given degree.
+int shCoeffsNonDC(int d) { return (d + 1) * (d + 1) - 1; }
+
+vec3 fetchSH(int base, int k) { return texelFetch(u_sh, base + k).rgb; }
+
+// Evaluate SH orders 1..sh_degree at direction d, returning RGB increment
+// to add to the DC base colour.
+vec3 evalSHOrders1Plus(int splat_id, vec3 d)
+{
+    int base = splat_id * shCoeffsNonDC(sh_degree);
+    vec3 rgb = vec3(0.0);
+
+    // Order 1 (3 coeffs)
+    rgb += -SH_C1 * d.y * fetchSH(base, 0)
+         +  SH_C1 * d.z * fetchSH(base, 1)
+         + -SH_C1 * d.x * fetchSH(base, 2);
+
+    if (sh_degree >= 2) {
+        float xx = d.x * d.x, yy = d.y * d.y, zz = d.z * d.z;
+        float xy = d.x * d.y, yz = d.y * d.z, xz = d.x * d.z;
+        rgb += SH_C2_0 * xy               * fetchSH(base, 3)
+             + SH_C2_1 * yz               * fetchSH(base, 4)
+             + SH_C2_2 * (2.0*zz-xx-yy)   * fetchSH(base, 5)
+             + SH_C2_3 * xz               * fetchSH(base, 6)
+             + SH_C2_4 * (xx - yy)        * fetchSH(base, 7);
+
+        if (sh_degree >= 3) {
+            rgb += SH_C3_0 * d.y * (3.0*xx - yy)              * fetchSH(base, 8)
+                 + SH_C3_1 * d.z * xy                          * fetchSH(base, 9)
+                 + SH_C3_2 * d.y * (4.0*zz - xx - yy)          * fetchSH(base, 10)
+                 + SH_C3_3 * d.z * (2.0*zz - 3.0*xx - 3.0*yy)  * fetchSH(base, 11)
+                 + SH_C3_4 * d.x * (4.0*zz - xx - yy)          * fetchSH(base, 12)
+                 + SH_C3_5 * d.z * (xx - yy)                   * fetchSH(base, 13)
+                 + SH_C3_6 * d.x * (xx - 3.0*yy)               * fetchSH(base, 14);
+        }
+    }
+    return rgb;
+}
 
 void main()
 {
@@ -82,7 +143,12 @@ void main()
     vec2 v1   = sqrt(max(2. * lambda1, 0.0)) * diag;
     vec2 v2   = sqrt(max(2. * lambda2, 0.0)) * vec2(diag.y, -diag.x);
 
-    vColor    = rgba;   // DC-only color pre-baked as uint8 on upload
+    // ── Colour: uint8 DC base, plus optional SH1..3 contribution ─────────────
+    vec3 rgb = rgba.rgb;
+    if (sh_degree > 0) {
+        rgb = clamp(rgb + evalSHOrders1Plus(splat_id, cam_view_dir), 0.0, 1.0);
+    }
+    vColor    = vec4(rgb, rgba.a);
     vPosition = vertex;
 
     gl_Position = vec4(
