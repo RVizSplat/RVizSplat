@@ -3,8 +3,15 @@
 // GLEW must be included before any other OpenGL header.
 #include <GL/glew.h>
 
+#ifdef GSPLAT_USE_CUDA
+#include <cuda_runtime.h>
+#endif
+
 #include <algorithm>
+#include <chrono>
 #include <numeric>
+
+#include <rclcpp/logging.hpp>
 
 #include <boost/sort/sort.hpp>
 
@@ -26,6 +33,20 @@ static const Ogre::String MOT_SPLAT_CLOUD = "SplatCloud";
 SplatCloud::SplatCloud(Ogre::SceneNode * parent_node)
 {
   scene_manager_ = parent_node->getCreator();
+
+#ifdef GSPLAT_USE_CUDA
+  {
+    int n = 0;
+    if (cudaGetDeviceCount(&n) == cudaSuccess && n > 0) {
+      use_cuda_ = true;
+    }
+  }
+  RCLCPP_INFO(
+    rclcpp::get_logger("gsplat_rviz_trials"),
+    "SplatCloud: splat sort = %s", use_cuda_ ? "CUDA GPU (CUB radix sort)" : "CPU (pdqsort)");
+#endif
+
+  last_stats_log_ = std::chrono::steady_clock::now();
   buildQuadGeometry();
 
   material_ = Ogre::MaterialManager::getSingleton().getByName(
@@ -58,6 +79,10 @@ SplatCloud::~SplatCloud()
     node->detachObject(this);
   }
   destroyTBO();
+
+#ifdef GSPLAT_USE_CUDA
+  cuda_sorter_.destroy();
+#endif
 
   delete render_op_.vertexData;
   delete render_op_.indexData;
@@ -176,6 +201,13 @@ void SplatCloud::buildIndexVBO()
   index_vbo_->setInstanceDataStepRate(1);
 
   render_op_.vertexData->vertexBufferBinding->setBinding(1, index_vbo_);
+
+#ifdef GSPLAT_USE_CUDA
+  if (use_cuda_) {
+    cuda_sorter_.destroy();
+    cuda_sorter_.init(splat_count_);
+  }
+#endif
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -223,6 +255,12 @@ void SplatCloud::setSplats(std::vector<SplatGPU> splats, int sh_degree)
     front_count_       = 0;
   }
 
+#ifdef GSPLAT_USE_CUDA
+  if (use_cuda_ && splat_count_ > 0) {
+    cuda_sorter_.uploadCenters(&centers_[0].x, splat_count_);
+  }
+#endif
+
   if (auto * node = getParentSceneNode()) {
     node->needUpdate();
   }
@@ -252,6 +290,10 @@ void SplatCloud::clear()
     upload_buf_front_.clear();
     front_count_       = 0;
   }
+
+#ifdef GSPLAT_USE_CUDA
+  cuda_sorter_.destroy();
+#endif
 
   if (auto * node = getParentSceneNode()) {
     node->needUpdate();
@@ -288,6 +330,30 @@ void SplatCloud::_updateRenderQueue(Ogre::RenderQueue * queue)
   // orphaning writeData is typically <1 ms while the sort itself is 100s of ms,
   // so the contention window is negligible.
   if (cam) {
+#ifdef GSPLAT_USE_CUDA
+    // CUDA fast path: CUB radix sort in ~1-2 ms for ~1M splats, so we run it
+    // inline on the render thread rather than deferring to a worker.
+    if (use_cuda_ && cuda_sorter_.h_vals_out && index_vbo_) {
+      const auto t0 = std::chrono::high_resolution_clock::now();
+      const Ogre::Vector3 fwd = cam->getDerivedDirection();
+      const float cam_fwd[3] = {fwd.x, fwd.y, fwd.z};
+      if (cuda_sorter_.sort(cam_fwd, splat_count_)) {
+        index_vbo_->writeData(
+          0, splat_count_ * sizeof(float), cuda_sorter_.h_vals_out, false);
+        const double ms = std::chrono::duration<double, std::milli>(
+          std::chrono::high_resolution_clock::now() - t0).count();
+        recordSortTime(ms, "CUDA");
+        queue->addRenderable(this, 95u, mRenderQueuePriority);
+        return;
+      }
+      RCLCPP_ERROR_ONCE(
+        rclcpp::get_logger("gsplat_rviz_trials"),
+        "SplatCloud: CUDA sort failed — falling back to CPU worker sort");
+    }
+#endif
+
+    // CPU fallback: post the view direction to the worker, pick up any result
+    // completed since the last frame.
     const Ogre::Vector3 fwd = cam->getDerivedDirection();
     std::lock_guard<std::mutex> lock(sort_mutex_);
 
@@ -339,6 +405,8 @@ void SplatCloud::sortWorkerMain()
         depth_keys_.size() == count &&
         sort_indices_.size() == count)
     {
+      const auto t0 = std::chrono::high_resolution_clock::now();
+
       for (uint32_t i = 0; i < count; ++i) {
         depth_keys_[i] = fwd.dotProduct(centers_[i]);
       }
@@ -356,6 +424,10 @@ void SplatCloud::sortWorkerMain()
         upload_buf_[i] = static_cast<float>(sort_indices_[i]);
       }
 
+      const double ms = std::chrono::duration<double, std::milli>(
+        std::chrono::high_resolution_clock::now() - t0).count();
+      recordSortTime(ms, "pdqsort");
+
       {
         std::lock_guard<std::mutex> lock(sort_mutex_);
         std::swap(upload_buf_front_, upload_buf_);
@@ -369,6 +441,31 @@ void SplatCloud::sortWorkerMain()
     }
 
     sort_idle_cv_.notify_all();
+  }
+}
+
+void SplatCloud::recordSortTime(double ms, const char * method)
+{
+  stat_sum_ -= sort_times_ms_[stat_head_];
+  sort_times_ms_[stat_head_] = ms;
+  stat_sum_ += ms;
+  stat_head_ = (stat_head_ + 1) % kStatWindow;
+  if (stat_count_ < kStatWindow) ++stat_count_;
+
+  const auto now = std::chrono::steady_clock::now();
+  if (std::chrono::duration<double>(now - last_stats_log_).count() >= 2.0) {
+    last_stats_log_ = now;
+    const double avg = stat_sum_ / stat_count_;
+    double mn = sort_times_ms_[0];
+    double mx = sort_times_ms_[0];
+    for (int i = 1; i < stat_count_; i++) {
+      if (sort_times_ms_[i] < mn) mn = sort_times_ms_[i];
+      if (sort_times_ms_[i] > mx) mx = sort_times_ms_[i];
+    }
+    RCLCPP_INFO(
+      rclcpp::get_logger("gsplat_rviz_trials"),
+      "Sort [%-7s] %u splats | cur %.2fms  avg %.2fms  min %.2fms  max %.2fms  (n=%d)",
+      method, splat_count_, ms, avg, mn, mx, stat_count_);
   }
 }
 

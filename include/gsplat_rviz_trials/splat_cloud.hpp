@@ -1,6 +1,8 @@
 #ifndef GSPLAT_RVIZ_TRIALS__SPLAT_CLOUD_HPP_
 #define GSPLAT_RVIZ_TRIALS__SPLAT_CLOUD_HPP_
 
+#include <array>
+#include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <mutex>
@@ -17,6 +19,10 @@
 
 #include "gsplat_rviz_trials/splat_gpu.hpp"
 #include "gsplat_rviz_trials/visibility_control.hpp"
+
+#ifdef GSPLAT_USE_CUDA
+#include "gsplat_rviz_trials/cuda_sorter.hpp"
+#endif
 
 namespace Ogre
 {
@@ -114,7 +120,7 @@ private:
   std::vector<uint32_t>      sort_indices_; // sorted permutation, kept from last frame
   std::vector<float>         upload_buf_;   // worker's back buffer — float cast of sort_indices_
 
-  // Sort worker thread and its synchronisation primitives.
+  // CPU-sort worker thread (fallback when CUDA is unavailable).
   // The worker reads centres/sort_indices_/depth_keys_ and writes upload_buf_ without
   // holding sort_mutex_; the mutex only protects the request/result hand-off below.
   std::thread              sort_thread_;
@@ -128,6 +134,21 @@ private:
   Ogre::Vector3            sort_req_fwd_;          // view direction requested by the main thread
   std::vector<float>       upload_buf_front_;      // completed result, swapped out of upload_buf_
   uint32_t                 front_count_          = 0;
+
+#ifdef GSPLAT_USE_CUDA
+  // CUDA fast path — active when a CUDA device is detected at construction.
+  bool       use_cuda_   = false;
+  CudaSorter cuda_sorter_;
+#endif
+
+  // Sort timing — 60-sample circular buffer, logged every 2 seconds.
+  static constexpr int kStatWindow = 60;
+  std::array<double, kStatWindow> sort_times_ms_{};
+  int    stat_head_  = 0;
+  int    stat_count_ = 0;
+  double stat_sum_   = 0.0;
+  std::chrono::steady_clock::time_point last_stats_log_;
+  void recordSortTime(double sort_ms, const char * method);
 };
 
 }  // namespace gsplat_rviz_trials
