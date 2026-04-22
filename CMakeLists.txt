@@ -24,6 +24,7 @@ find_package(rviz_rendering REQUIRED)
 find_package(rviz_ogre_vendor REQUIRED)
 find_package(Boost REQUIRED)
 find_package(GLEW REQUIRED)
+find_package(CUDAToolkit QUIET)
 
 # Avoid find_package(QT NAMES Qt6 Qt5 ...) due to CMake's default ascending path resolution
 find_package(Qt6 QUIET COMPONENTS Widgets)
@@ -55,6 +56,18 @@ set(gsplat_rviz_trials_source_files
   src/gsplat_rviz_trials/splat_cloud.cpp
 )
 
+if(CUDAToolkit_FOUND)
+  message(WARNING "gsplat [INFO]: CUDA toolkit found (${CUDAToolkit_VERSION}) — building GPU sort")
+  enable_language(CUDA)
+  if(NOT CMAKE_CUDA_STANDARD)
+    set(CMAKE_CUDA_STANDARD 17)
+    set(CMAKE_CUDA_STANDARD_REQUIRED ON)
+  endif()
+  list(APPEND gsplat_rviz_trials_source_files src/gsplat_rviz_trials/cuda_sorter.cu)
+else()
+  message(WARNING "gsplat [INFO]: CUDA toolkit not found — using CPU pdqsort fallback")
+endif()
+
 add_library(gsplat_rviz_trials SHARED
   ${gsplat_rviz_trials_moc_files}
   ${gsplat_rviz_trials_source_files}
@@ -76,6 +89,11 @@ target_link_libraries(gsplat_rviz_trials PUBLIC
 )
 
 target_compile_definitions(gsplat_rviz_trials PRIVATE "GSPLAT_RVIZ_TRIALS_BUILDING_LIBRARY")
+
+if(CUDAToolkit_FOUND)
+  target_compile_definitions(gsplat_rviz_trials PRIVATE GSPLAT_USE_CUDA)
+  target_link_libraries(gsplat_rviz_trials PRIVATE CUDA::cudart)
+endif()
 
 register_rviz_ogre_media_exports(DIRECTORIES 
   "ogre_media/materials/scripts"

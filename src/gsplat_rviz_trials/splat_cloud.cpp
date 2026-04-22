@@ -6,6 +6,11 @@
 #include <algorithm>
 #include <numeric>
 
+#ifdef GSPLAT_USE_CUDA
+#include <cuda_runtime.h>
+#include <rclcpp/logging.hpp>
+#endif
+
 #include <boost/sort/sort.hpp>
 
 #include <OgreCamera.h>
@@ -26,6 +31,20 @@ static const Ogre::String MOT_SPLAT_CLOUD = "SplatCloud";
 SplatCloud::SplatCloud(Ogre::SceneNode * parent_node)
 {
   scene_manager_ = parent_node->getCreator();
+
+#ifdef GSPLAT_USE_CUDA
+  {
+    int n = 0;
+    if (cudaGetDeviceCount(&n) == cudaSuccess && n > 0) {
+      use_cuda_ = true;
+    }
+    RCLCPP_INFO(
+      rclcpp::get_logger("gsplat_rviz_trials"),
+      "SplatCloud: splat sort = %s",
+      use_cuda_ ? "CUDA GPU (CUB radix sort)" : "CPU (pdqsort)");
+  }
+#endif
+
   buildQuadGeometry();
 
   material_ = Ogre::MaterialManager::getSingleton().getByName(
@@ -45,6 +64,10 @@ SplatCloud::~SplatCloud()
     node->detachObject(this);
   }
   destroyTBO();
+
+#ifdef GSPLAT_USE_CUDA
+  cuda_sorter_.destroy();
+#endif
 
   delete render_op_.vertexData;
   delete render_op_.indexData;
@@ -163,6 +186,13 @@ void SplatCloud::buildIndexVBO()
   index_vbo_->setInstanceDataStepRate(1);
 
   render_op_.vertexData->vertexBufferBinding->setBinding(1, index_vbo_);
+
+#ifdef GSPLAT_USE_CUDA
+  if (use_cuda_) {
+    cuda_sorter_.destroy();
+    cuda_sorter_.init(splat_count_);
+  }
+#endif
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -199,6 +229,12 @@ void SplatCloud::setSplats(std::vector<SplatGPU> splats, int sh_degree)
   std::iota(sort_indices_.begin(), sort_indices_.end(), 0u);
   upload_buf_.resize(splat_count_);
 
+#ifdef GSPLAT_USE_CUDA
+  if (use_cuda_) {
+    cuda_sorter_.uploadCenters(&centers_[0].x, splat_count_);
+  }
+#endif
+
   if (auto * node = getParentSceneNode()) {
     node->needUpdate();
   }
@@ -219,6 +255,10 @@ void SplatCloud::clear()
   depth_keys_.clear();
   sort_indices_.clear();
   upload_buf_.clear();
+
+#ifdef GSPLAT_USE_CUDA
+  cuda_sorter_.destroy();
+#endif
 
   if (auto * node = getParentSceneNode()) {
     node->needUpdate();
@@ -257,6 +297,21 @@ void SplatCloud::sortSplats()
   if (!vp) return;
   const Ogre::Camera * cam = vp->getCamera();
   if (!cam) return;
+
+#ifdef GSPLAT_USE_CUDA
+  if (use_cuda_ && cuda_sorter_.h_vals_out) {
+    const Ogre::Vector3 fwd = cam->getDerivedDirection();
+    const float cam_fwd[3] = {fwd.x, fwd.y, fwd.z};
+    if (cuda_sorter_.sort(cam_fwd, splat_count_)) {
+      index_vbo_->writeData(
+        0, splat_count_ * sizeof(float), cuda_sorter_.h_vals_out, false);
+      return;
+    }
+    RCLCPP_ERROR_ONCE(
+      rclcpp::get_logger("gsplat_rviz_trials"),
+      "SplatCloud: CUDA sort failed — falling back to pdqsort");
+  }
+#endif
 
   const Ogre::Vector3 fwd = cam->getDerivedDirection();
 
