@@ -34,10 +34,23 @@ SplatCloud::SplatCloud(Ogre::SceneNode * parent_node)
 
   parent_node->attachObject(this);
   scene_manager_->addRenderObjectListener(this);
+
+  sort_thread_ = std::thread(&SplatCloud::sortWorkerMain, this);
 }
 
 SplatCloud::~SplatCloud()
 {
+  // Stop the sort worker before tearing down the data it touches.
+  {
+    std::lock_guard<std::mutex> lock(sort_mutex_);
+    sort_shutdown_        = true;
+    sort_request_pending_ = false;
+  }
+  sort_wake_cv_.notify_all();
+  if (sort_thread_.joinable()) {
+    sort_thread_.join();
+  }
+
   if (scene_manager_) {
     scene_manager_->removeRenderObjectListener(this);
   }
@@ -169,6 +182,9 @@ void SplatCloud::buildIndexVBO()
 
 void SplatCloud::setSplats(std::vector<SplatGPU> splats, int sh_degree)
 {
+  // Ensure the worker is not mid-sort before we mutate centers_/sort_indices_/upload_buf_.
+  waitForSortIdle();
+
   splat_count_      = static_cast<uint32_t>(splats.size());
   max_sh_degree_    = sh_degree;
   active_sh_degree_ = std::min(1, sh_degree);
@@ -199,6 +215,14 @@ void SplatCloud::setSplats(std::vector<SplatGPU> splats, int sh_degree)
   std::iota(sort_indices_.begin(), sort_indices_.end(), 0u);
   upload_buf_.resize(splat_count_);
 
+  // Invalidate any stale completed result carried over from the previous load.
+  {
+    std::lock_guard<std::mutex> lock(sort_mutex_);
+    sort_result_ready_ = false;
+    upload_buf_front_.clear();
+    front_count_       = 0;
+  }
+
   if (auto * node = getParentSceneNode()) {
     node->needUpdate();
   }
@@ -206,6 +230,8 @@ void SplatCloud::setSplats(std::vector<SplatGPU> splats, int sh_degree)
 
 void SplatCloud::clear()
 {
+  waitForSortIdle();
+
   splat_count_      = 0;
   max_sh_degree_    = 0;
   active_sh_degree_ = 0;
@@ -219,6 +245,13 @@ void SplatCloud::clear()
   depth_keys_.clear();
   sort_indices_.clear();
   upload_buf_.clear();
+
+  {
+    std::lock_guard<std::mutex> lock(sort_mutex_);
+    sort_result_ready_ = false;
+    upload_buf_front_.clear();
+    front_count_       = 0;
+  }
 
   if (auto * node = getParentSceneNode()) {
     node->needUpdate();
@@ -245,40 +278,98 @@ Ogre::Real SplatCloud::getBoundingRadius() const
 void SplatCloud::_updateRenderQueue(Ogre::RenderQueue * queue)
 {
   if (splat_count_ == 0) return;
-  sortSplats();
+
+  auto * vp = scene_manager_->getCurrentViewport();
+  const Ogre::Camera * cam = vp ? vp->getCamera() : nullptr;
+
+  // Post the current view direction to the worker and pick up any completed
+  // sort produced since the last frame. The VBO upload happens under the lock
+  // so the worker cannot swap upload_buf_front_ out from under us mid-read —
+  // orphaning writeData is typically <1 ms while the sort itself is 100s of ms,
+  // so the contention window is negligible.
+  if (cam) {
+    const Ogre::Vector3 fwd = cam->getDerivedDirection();
+    std::lock_guard<std::mutex> lock(sort_mutex_);
+
+    if (sort_result_ready_ && front_count_ == splat_count_ && index_vbo_) {
+      index_vbo_->writeData(
+        0, front_count_ * sizeof(float),
+        upload_buf_front_.data(), true);
+      sort_result_ready_ = false;
+    }
+
+    sort_req_fwd_         = fwd;
+    sort_request_pending_ = true;
+  }
+  sort_wake_cv_.notify_one();
+
   queue->addRenderable(this, 95u, mRenderQueuePriority);
 }
 
-// ── Sorting ───────────────────────────────────────────────────────────────────
+// ── Sort worker ───────────────────────────────────────────────────────────────
 
-void SplatCloud::sortSplats()
+void SplatCloud::waitForSortIdle()
 {
-  auto * vp = scene_manager_->getCurrentViewport();
-  if (!vp) return;
-  const Ogre::Camera * cam = vp->getCamera();
-  if (!cam) return;
+  std::unique_lock<std::mutex> lock(sort_mutex_);
+  sort_request_pending_ = false;   // cancel any queued request so the worker doesn't pick it up
+  sort_idle_cv_.wait(lock, [this] { return !sort_running_; });
+}
 
-  const Ogre::Vector3 fwd = cam->getDerivedDirection();
+void SplatCloud::sortWorkerMain()
+{
+  while (true) {
+    Ogre::Vector3 fwd;
+    uint32_t count = 0;
+    {
+      std::unique_lock<std::mutex> lock(sort_mutex_);
+      sort_wake_cv_.wait(lock, [this] { return sort_shutdown_ || sort_request_pending_; });
+      if (sort_shutdown_) return;
 
-  // Sequential depth computation — centres_ is a compact array so this is cache-friendly.
-  for (uint32_t i = 0; i < splat_count_; i++) {
-    depth_keys_[i] = fwd.dotProduct(centers_[i]);
+      fwd                   = sort_req_fwd_;
+      count                 = splat_count_;
+      sort_request_pending_ = false;
+      sort_running_         = true;
+    }
+
+    // The main thread guarantees (via waitForSortIdle) that these arrays are
+    // consistently sized while we hold sort_running_ == true. The size check
+    // is belt-and-braces in case of a bug.
+    if (count > 0 &&
+        centers_.size() == count &&
+        depth_keys_.size() == count &&
+        sort_indices_.size() == count)
+    {
+      for (uint32_t i = 0; i < count; ++i) {
+        depth_keys_[i] = fwd.dotProduct(centers_[i]);
+      }
+
+      // sort_indices_ retains the previous frame's order so pdqsort only fixes
+      // the inversions caused by camera movement (near O(n) for small drags).
+      boost::sort::pdqsort(
+        sort_indices_.begin(), sort_indices_.end(),
+        [this](uint32_t a, uint32_t b) {
+          return depth_keys_[a] > depth_keys_[b];  // descending = back-to-front
+        });
+
+      if (upload_buf_.size() != count) upload_buf_.resize(count);
+      for (uint32_t i = 0; i < count; ++i) {
+        upload_buf_[i] = static_cast<float>(sort_indices_[i]);
+      }
+
+      {
+        std::lock_guard<std::mutex> lock(sort_mutex_);
+        std::swap(upload_buf_front_, upload_buf_);
+        front_count_       = count;
+        sort_result_ready_ = true;
+        sort_running_      = false;
+      }
+    } else {
+      std::lock_guard<std::mutex> lock(sort_mutex_);
+      sort_running_ = false;
+    }
+
+    sort_idle_cv_.notify_all();
   }
-
-  // sort_indices_ retains the previous frame's order so pdqsort only fixes
-  // the inversions caused by the camera movement (near O(n) for small drags).
-  boost::sort::pdqsort(
-    sort_indices_.begin(), sort_indices_.end(),
-    [this](uint32_t a, uint32_t b) {
-      return depth_keys_[a] > depth_keys_[b];  // descending = back-to-front
-    });
-
-  // Cast to float for the per-instance VBO attribute (float is exact for N < 2^24).
-  for (uint32_t i = 0; i < splat_count_; i++) {
-    upload_buf_[i] = static_cast<float>(sort_indices_[i]);
-  }
-
-  index_vbo_->writeData(0, splat_count_ * sizeof(float), upload_buf_.data(), false);
 }
 
 void SplatCloud::visitRenderables(Ogre::Renderable::Visitor * visitor, bool /*debug*/)

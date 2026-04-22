@@ -1,7 +1,10 @@
 #ifndef GSPLAT_RVIZ_TRIALS__SPLAT_CLOUD_HPP_
 #define GSPLAT_RVIZ_TRIALS__SPLAT_CLOUD_HPP_
 
+#include <condition_variable>
 #include <cstdint>
+#include <mutex>
+#include <thread>
 #include <vector>
 
 #include <OgreAxisAlignedBox.h>
@@ -81,7 +84,8 @@ private:
   void destroyTBO();
   void uploadTBO();       // must be called with GL context current
   void buildIndexVBO();   // allocates the per-instance index VBO
-  void sortSplats();      // depth-sorts and uploads index VBO every frame
+  void sortWorkerMain();  // runs on sort_thread_; depth-sorts off the render thread
+  void waitForSortIdle(); // blocks until the worker is not mid-sort (for safe mutation of shared state)
 
   Ogre::MaterialPtr material_;
   Ogre::RenderOperation render_op_;
@@ -101,11 +105,29 @@ private:
 
   Ogre::HardwareVertexBufferSharedPtr index_vbo_;  // per-instance sorted indices
 
-  // Sorting state — persists between frames so pdqsort sees near-sorted input
+  // Sorting state — persists between frames so pdqsort sees near-sorted input.
+  // Owned by the sort worker thread during steady state; only mutated on the
+  // main thread from setSplats()/clear() after waitForSortIdle() has drained
+  // any in-flight sort.
   std::vector<Ogre::Vector3> centers_;      // splat centres (cache-friendly, separate from TBO data)
   std::vector<float>         depth_keys_;   // depth per original splat index
   std::vector<uint32_t>      sort_indices_; // sorted permutation, kept from last frame
-  std::vector<float>         upload_buf_;   // float cast of sort_indices_ for VBO upload
+  std::vector<float>         upload_buf_;   // worker's back buffer — float cast of sort_indices_
+
+  // Sort worker thread and its synchronisation primitives.
+  // The worker reads centres/sort_indices_/depth_keys_ and writes upload_buf_ without
+  // holding sort_mutex_; the mutex only protects the request/result hand-off below.
+  std::thread              sort_thread_;
+  std::mutex               sort_mutex_;
+  std::condition_variable  sort_wake_cv_;          // main → worker: new request / shutdown
+  std::condition_variable  sort_idle_cv_;          // worker → main: sort finished (for setSplats/clear/dtor)
+  bool                     sort_shutdown_        = false;
+  bool                     sort_request_pending_ = false;
+  bool                     sort_running_         = false;
+  bool                     sort_result_ready_    = false;
+  Ogre::Vector3            sort_req_fwd_;          // view direction requested by the main thread
+  std::vector<float>       upload_buf_front_;      // completed result, swapped out of upload_buf_
+  uint32_t                 front_count_          = 0;
 };
 
 }  // namespace gsplat_rviz_trials
