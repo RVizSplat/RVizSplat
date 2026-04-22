@@ -3,8 +3,16 @@
 // GLEW must be included before any other OpenGL header.
 #include <GL/glew.h>
 
+#ifdef GSPLAT_USE_CUDA
+#include <cuda_runtime.h>
+#endif
+
 #include <algorithm>
+#include <chrono>
+#include <cstring>
 #include <numeric>
+
+#include <rclcpp/logging.hpp>
 
 #include <boost/sort/sort.hpp>
 
@@ -23,9 +31,70 @@ namespace gsplat_rviz_trials
 
 static const Ogre::String MOT_SPLAT_CLOUD = "SplatCloud";
 
+// IEEE 754 float32 → binary16. Round-to-nearest-even, saturates to inf on overflow.
+static inline uint16_t floatToHalf(float f)
+{
+  uint32_t x;
+  std::memcpy(&x, &f, 4);
+  const uint32_t sign = (x >> 16) & 0x8000u;
+  const uint32_t e32  = (x >> 23) & 0xFFu;
+  const uint32_t m32  = x & 0x7FFFFFu;
+
+  if (e32 == 0xFFu) {                          // Inf / NaN
+    return uint16_t(sign | 0x7C00u | (m32 ? 0x200u : 0u));
+  }
+  int e = int(e32) - 127 + 15;
+  if (e >= 0x1F) return uint16_t(sign | 0x7C00u);  // overflow → inf
+  if (e <= 0) {                                // subnormal / zero / underflow
+    if (e < -10) return uint16_t(sign);
+    const uint32_t m = m32 | 0x800000u;
+    const uint32_t shift = uint32_t(14 - e);
+    const uint32_t half  = (m >> shift) + ((m >> (shift - 1)) & 1u);
+    return uint16_t(sign | half);
+  }
+  uint32_t m = (m32 >> 13) + ((m32 >> 12) & 1u);
+  if (m & 0x400u) { m = 0; ++e; if (e >= 0x1F) return uint16_t(sign | 0x7C00u); }
+  return uint16_t(sign | (uint32_t(e) << 10) | m);
+}
+
+static inline uint32_t packHalf2x16(float a, float b)
+{
+  return uint32_t(floatToHalf(a)) | (uint32_t(floatToHalf(b)) << 16);
+}
+
+// DC SH coefficient (Y_0^0). RGB = SH_C0 * sh[0] + 0.5, clamp [0,1].
+static constexpr float kShC0 = 0.28209479177387814f;
+
+static inline uint32_t packDCColor(const float sh0[3], float alpha)
+{
+  auto quant = [](float v) {
+    v = v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
+    return uint32_t(v * 255.0f + 0.5f) & 0xFFu;
+  };
+  const uint32_t r = quant(kShC0 * sh0[0] + 0.5f);
+  const uint32_t g = quant(kShC0 * sh0[1] + 0.5f);
+  const uint32_t b = quant(kShC0 * sh0[2] + 0.5f);
+  const uint32_t a = quant(alpha);
+  return r | (g << 8) | (b << 16) | (a << 24);
+}
+
 SplatCloud::SplatCloud(Ogre::SceneNode * parent_node)
 {
   scene_manager_ = parent_node->getCreator();
+
+#ifdef GSPLAT_USE_CUDA
+  {
+    int n = 0;
+    if (cudaGetDeviceCount(&n) == cudaSuccess && n > 0) {
+      use_cuda_ = true;
+    }
+  }
+  RCLCPP_INFO(
+    rclcpp::get_logger("gsplat_rviz_trials"),
+    "SplatCloud: splat sort = %s", use_cuda_ ? "CUDA GPU (CUB radix sort)" : "CPU (pdqsort)");
+#endif
+
+  last_stats_log_ = std::chrono::steady_clock::now();
   buildQuadGeometry();
 
   material_ = Ogre::MaterialManager::getSingleton().getByName(
@@ -58,6 +127,10 @@ SplatCloud::~SplatCloud()
     node->detachObject(this);
   }
   destroyTBO();
+
+#ifdef GSPLAT_USE_CUDA
+  cuda_sorter_.destroy();
+#endif
 
   delete render_op_.vertexData;
   delete render_op_.indexData;
@@ -113,8 +186,11 @@ void SplatCloud::buildQuadGeometry()
 
 void SplatCloud::destroyTBO()
 {
-  if (tbo_tex_) { glDeleteTextures(1, &tbo_tex_); tbo_tex_ = 0; }
-  if (tbo_buf_) { glDeleteBuffers(1, &tbo_buf_);  tbo_buf_ = 0; }
+  if (tbo_tex_)    { glDeleteTextures(1, &tbo_tex_);    tbo_tex_ = 0; }
+  if (tbo_buf_)    { glDeleteBuffers(1, &tbo_buf_);     tbo_buf_ = 0; }
+  if (sh_tbo_tex_) { glDeleteTextures(1, &sh_tbo_tex_); sh_tbo_tex_ = 0; }
+  if (sh_tbo_buf_) { glDeleteBuffers(1, &sh_tbo_buf_);  sh_tbo_buf_ = 0; }
+  sh_coeffs_per_splat_ = 0;
 }
 
 void SplatCloud::uploadTBO()
@@ -122,38 +198,76 @@ void SplatCloud::uploadTBO()
   destroyTBO();
   if (pending_splats_.empty()) return;
 
-  const int num_sh      = (active_sh_degree_ + 1) * (active_sh_degree_ + 1);
-  texels_per_splat_     = 3 + num_sh;
-
-  // Pack only the active SH coefficients — one vec4 (16 B) per texel.
-  std::vector<float> packed(static_cast<size_t>(splat_count_) * texels_per_splat_ * 4);
-  for (uint32_t i = 0; i < splat_count_; i++) {
+  // Compact base TBO: 2 uvec4 texels per splat (32 B total).
+  //   texel 0: center.xyz as float-bits, packHalf2x16(cov00, cov01)
+  //   texel 1: packHalf2x16(cov02, cov11), packHalf2x16(cov12, cov22),
+  //            packUnorm4x8(DC-baked RGBA), reserved
+  texels_per_splat_ = 2;
+  std::vector<uint32_t> packed(static_cast<size_t>(splat_count_) * 8);
+  for (uint32_t i = 0; i < splat_count_; ++i) {
     const SplatGPU & s = pending_splats_[i];
-    float * d = packed.data() + static_cast<size_t>(i) * texels_per_splat_ * 4;
-    d[0]  = s.center[0]; d[1]  = s.center[1]; d[2]  = s.center[2]; d[3]  = s.alpha;
-    d[4]  = s.covA[0];   d[5]  = s.covA[1];   d[6]  = s.covA[2];   d[7]  = 0.0f;
-    d[8]  = s.covB[0];   d[9]  = s.covB[1];   d[10] = s.covB[2];   d[11] = 0.0f;
-    for (int c = 0; c < num_sh; c++) {
-      d[12 + c * 4]     = s.sh[c][0];
-      d[12 + c * 4 + 1] = s.sh[c][1];
-      d[12 + c * 4 + 2] = s.sh[c][2];
-      d[12 + c * 4 + 3] = 0.0f;
-    }
+    uint32_t * d = packed.data() + static_cast<size_t>(i) * 8;
+
+    std::memcpy(&d[0], &s.center[0], 4);
+    std::memcpy(&d[1], &s.center[1], 4);
+    std::memcpy(&d[2], &s.center[2], 4);
+    // Covariance upper-triangle: covA = {v11,v12,v13}, covB = {v22,v23,v33}
+    d[3] = packHalf2x16(s.covA[0], s.covA[1]);  // v11, v12
+    d[4] = packHalf2x16(s.covA[2], s.covB[0]);  // v13, v22
+    d[5] = packHalf2x16(s.covB[1], s.covB[2]);  // v23, v33
+    d[6] = packDCColor(s.sh[0], s.alpha);
+    d[7] = 0u;
   }
 
   glGenBuffers(1, &tbo_buf_);
   glBindBuffer(GL_TEXTURE_BUFFER, tbo_buf_);
   glBufferData(
     GL_TEXTURE_BUFFER,
-    static_cast<GLsizeiptr>(packed.size() * sizeof(float)),
+    static_cast<GLsizeiptr>(packed.size() * sizeof(uint32_t)),
     packed.data(),
     GL_STATIC_DRAW);
   glBindBuffer(GL_TEXTURE_BUFFER, 0);
 
   glGenTextures(1, &tbo_tex_);
   glBindTexture(GL_TEXTURE_BUFFER, tbo_tex_);
-  glTexBuffer(GL_TEXTURE_BUFFER, GL_RGBA32F, tbo_buf_);
+  glTexBuffer(GL_TEXTURE_BUFFER, GL_RGBA32UI, tbo_buf_);
   glBindTexture(GL_TEXTURE_BUFFER, 0);
+
+  // ── Optional SH TBO for non-DC coefficients (GL_RGBA16F, 8 B/coeff) ──
+  sh_coeffs_per_splat_ =
+    (active_sh_degree_ + 1) * (active_sh_degree_ + 1) - 1;  // excludes DC
+  if (sh_coeffs_per_splat_ > 0) {
+    // Each non-DC coefficient packs into one RGBA16F texel: (R, G, B, 0).
+    // Layout is [splat0_c1, splat0_c2, …, splat1_c1, splat1_c2, …].
+    std::vector<uint16_t> sh_packed(
+      static_cast<size_t>(splat_count_) * sh_coeffs_per_splat_ * 4);
+    for (uint32_t i = 0; i < splat_count_; ++i) {
+      const SplatGPU & s = pending_splats_[i];
+      uint16_t * d = sh_packed.data() +
+        static_cast<size_t>(i) * sh_coeffs_per_splat_ * 4;
+      for (int c = 0; c < sh_coeffs_per_splat_; ++c) {
+        // SplatGPU::sh[0] is DC; non-DC starts at sh[1].
+        d[c * 4 + 0] = floatToHalf(s.sh[c + 1][0]);
+        d[c * 4 + 1] = floatToHalf(s.sh[c + 1][1]);
+        d[c * 4 + 2] = floatToHalf(s.sh[c + 1][2]);
+        d[c * 4 + 3] = 0;
+      }
+    }
+
+    glGenBuffers(1, &sh_tbo_buf_);
+    glBindBuffer(GL_TEXTURE_BUFFER, sh_tbo_buf_);
+    glBufferData(
+      GL_TEXTURE_BUFFER,
+      static_cast<GLsizeiptr>(sh_packed.size() * sizeof(uint16_t)),
+      sh_packed.data(),
+      GL_STATIC_DRAW);
+    glBindBuffer(GL_TEXTURE_BUFFER, 0);
+
+    glGenTextures(1, &sh_tbo_tex_);
+    glBindTexture(GL_TEXTURE_BUFFER, sh_tbo_tex_);
+    glTexBuffer(GL_TEXTURE_BUFFER, GL_RGBA16F, sh_tbo_buf_);
+    glBindTexture(GL_TEXTURE_BUFFER, 0);
+  }
 }
 
 // ── Per-instance index VBO ────────────────────────────────────────────────────
@@ -176,6 +290,13 @@ void SplatCloud::buildIndexVBO()
   index_vbo_->setInstanceDataStepRate(1);
 
   render_op_.vertexData->vertexBufferBinding->setBinding(1, index_vbo_);
+
+#ifdef GSPLAT_USE_CUDA
+  if (use_cuda_) {
+    cuda_sorter_.destroy();
+    cuda_sorter_.init(splat_count_);
+  }
+#endif
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -187,7 +308,7 @@ void SplatCloud::setSplats(std::vector<SplatGPU> splats, int sh_degree)
 
   splat_count_      = static_cast<uint32_t>(splats.size());
   max_sh_degree_    = sh_degree;
-  active_sh_degree_ = std::min(1, sh_degree);
+  active_sh_degree_ = std::min(1, sh_degree);  // default: SH1 if available, else 0
   pending_splats_   = std::move(splats);
   upload_pending_ = true;
 
@@ -223,6 +344,12 @@ void SplatCloud::setSplats(std::vector<SplatGPU> splats, int sh_degree)
     front_count_       = 0;
   }
 
+#ifdef GSPLAT_USE_CUDA
+  if (use_cuda_ && splat_count_ > 0) {
+    cuda_sorter_.uploadCenters(&centers_[0].x, splat_count_);
+  }
+#endif
+
   if (auto * node = getParentSceneNode()) {
     node->needUpdate();
   }
@@ -252,6 +379,10 @@ void SplatCloud::clear()
     upload_buf_front_.clear();
     front_count_       = 0;
   }
+
+#ifdef GSPLAT_USE_CUDA
+  cuda_sorter_.destroy();
+#endif
 
   if (auto * node = getParentSceneNode()) {
     node->needUpdate();
@@ -288,6 +419,30 @@ void SplatCloud::_updateRenderQueue(Ogre::RenderQueue * queue)
   // orphaning writeData is typically <1 ms while the sort itself is 100s of ms,
   // so the contention window is negligible.
   if (cam) {
+#ifdef GSPLAT_USE_CUDA
+    // CUDA fast path: CUB radix sort in ~1-2 ms for ~1M splats, so we run it
+    // inline on the render thread rather than deferring to a worker.
+    if (use_cuda_ && cuda_sorter_.h_vals_out && index_vbo_) {
+      const auto t0 = std::chrono::high_resolution_clock::now();
+      const Ogre::Vector3 fwd = cam->getDerivedDirection();
+      const float cam_fwd[3] = {fwd.x, fwd.y, fwd.z};
+      if (cuda_sorter_.sort(cam_fwd, splat_count_)) {
+        index_vbo_->writeData(
+          0, splat_count_ * sizeof(float), cuda_sorter_.h_vals_out, false);
+        const double ms = std::chrono::duration<double, std::milli>(
+          std::chrono::high_resolution_clock::now() - t0).count();
+        recordSortTime(ms, "CUDA");
+        queue->addRenderable(this, 95u, mRenderQueuePriority);
+        return;
+      }
+      RCLCPP_ERROR_ONCE(
+        rclcpp::get_logger("gsplat_rviz_trials"),
+        "SplatCloud: CUDA sort failed — falling back to CPU worker sort");
+    }
+#endif
+
+    // CPU fallback: post the view direction to the worker, pick up any result
+    // completed since the last frame.
     const Ogre::Vector3 fwd = cam->getDerivedDirection();
     std::lock_guard<std::mutex> lock(sort_mutex_);
 
@@ -339,6 +494,8 @@ void SplatCloud::sortWorkerMain()
         depth_keys_.size() == count &&
         sort_indices_.size() == count)
     {
+      const auto t0 = std::chrono::high_resolution_clock::now();
+
       for (uint32_t i = 0; i < count; ++i) {
         depth_keys_[i] = fwd.dotProduct(centers_[i]);
       }
@@ -356,6 +513,10 @@ void SplatCloud::sortWorkerMain()
         upload_buf_[i] = static_cast<float>(sort_indices_[i]);
       }
 
+      const double ms = std::chrono::duration<double, std::milli>(
+        std::chrono::high_resolution_clock::now() - t0).count();
+      recordSortTime(ms, "pdqsort");
+
       {
         std::lock_guard<std::mutex> lock(sort_mutex_);
         std::swap(upload_buf_front_, upload_buf_);
@@ -369,6 +530,31 @@ void SplatCloud::sortWorkerMain()
     }
 
     sort_idle_cv_.notify_all();
+  }
+}
+
+void SplatCloud::recordSortTime(double ms, const char * method)
+{
+  stat_sum_ -= sort_times_ms_[stat_head_];
+  sort_times_ms_[stat_head_] = ms;
+  stat_sum_ += ms;
+  stat_head_ = (stat_head_ + 1) % kStatWindow;
+  if (stat_count_ < kStatWindow) ++stat_count_;
+
+  const auto now = std::chrono::steady_clock::now();
+  if (std::chrono::duration<double>(now - last_stats_log_).count() >= 2.0) {
+    last_stats_log_ = now;
+    const double avg = stat_sum_ / stat_count_;
+    double mn = sort_times_ms_[0];
+    double mx = sort_times_ms_[0];
+    for (int i = 1; i < stat_count_; i++) {
+      if (sort_times_ms_[i] < mn) mn = sort_times_ms_[i];
+      if (sort_times_ms_[i] > mx) mx = sort_times_ms_[i];
+    }
+    RCLCPP_INFO(
+      rclcpp::get_logger("gsplat_rviz_trials"),
+      "Sort [%-7s] %u splats | cur %.2fms  avg %.2fms  min %.2fms  max %.2fms  (n=%d)",
+      method, splat_count_, ms, avg, mn, mx, stat_count_);
   }
 }
 
@@ -420,13 +606,18 @@ void SplatCloud::notifyRenderSingleObject(
   auto params = material_->getTechnique(0)->getPass(0)->getVertexProgramParameters();
   if (params) {
     params->setNamedConstant("sh_degree", active_sh_degree_);
-    params->setNamedConstant("u_stride",  texels_per_splat_);
   }
 
   if (tbo_tex_) {
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_BUFFER, tbo_tex_);
   }
+
+  // Bind SH TBO on unit 1 when it exists; otherwise leave whatever is there —
+  // the shader only samples it when sh_degree > 0.
+  glActiveTexture(GL_TEXTURE1);
+  glBindTexture(GL_TEXTURE_BUFFER, sh_tbo_tex_);
+  glActiveTexture(GL_TEXTURE0);
 }
 
 }  // namespace gsplat_rviz_trials
