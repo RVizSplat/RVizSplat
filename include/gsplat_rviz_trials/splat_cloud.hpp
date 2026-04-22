@@ -15,6 +15,10 @@
 #include "gsplat_rviz_trials/splat_gpu.hpp"
 #include "gsplat_rviz_trials/visibility_control.hpp"
 
+#ifdef GSPLAT_USE_CUDA
+#include "gsplat_rviz_trials/cuda_sorter.hpp"
+#endif
+
 namespace Ogre
 {
 class RenderQueue;
@@ -106,6 +110,13 @@ private:
   std::vector<float>         depth_keys_;   // depth per original splat index
   std::vector<uint32_t>      sort_indices_; // sorted permutation, kept from last frame
   std::vector<float>         upload_buf_;   // float cast of sort_indices_ for VBO upload
+
+#ifdef GSPLAT_USE_CUDA
+  bool         use_cuda_                  = false;
+  bool         cuda_registration_pending_ = false;
+  CudaSorter   cuda_sorter_;
+  void *       cuda_vbo_resource_         = nullptr;  // opaque cudaGraphicsResource_t
+#endif
 };
 
 }  // namespace gsplat_rviz_trials

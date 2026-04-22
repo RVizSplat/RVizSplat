@@ -3,8 +3,16 @@
 // GLEW must be included before any other OpenGL header.
 #include <GL/glew.h>
 
+#ifdef GSPLAT_USE_CUDA
+#include <cuda_gl_interop.h>
+#include <cuda_runtime.h>
+#include "gsplat_rviz_trials/cuda_gl_bridge.hpp"
+#endif
+
 #include <algorithm>
 #include <numeric>
+
+#include <rclcpp/logging.hpp>
 
 #include <boost/sort/sort.hpp>
 
@@ -26,6 +34,19 @@ static const Ogre::String MOT_SPLAT_CLOUD = "SplatCloud";
 SplatCloud::SplatCloud(Ogre::SceneNode * parent_node)
 {
   scene_manager_ = parent_node->getCreator();
+
+#ifdef GSPLAT_USE_CUDA
+  {
+    int n = 0;
+    if (cudaGetDeviceCount(&n) == cudaSuccess && n > 0) {
+      use_cuda_ = true;
+    }
+  }
+  RCLCPP_INFO(
+    rclcpp::get_logger("gsplat_rviz_trials"),
+    "SplatCloud: splat sort = %s", use_cuda_ ? "CUDA GPU (CUB radix sort)" : "CPU (pdqsort)");
+#endif
+
   buildQuadGeometry();
 
   material_ = Ogre::MaterialManager::getSingleton().getByName(
@@ -45,6 +66,15 @@ SplatCloud::~SplatCloud()
     node->detachObject(this);
   }
   destroyTBO();
+
+#ifdef GSPLAT_USE_CUDA
+  if (cuda_vbo_resource_) {
+    cudaGraphicsUnregisterResource(
+      reinterpret_cast<cudaGraphicsResource_t>(cuda_vbo_resource_));
+    cuda_vbo_resource_ = nullptr;
+  }
+  cuda_sorter_.destroy();
+#endif
 
   delete render_op_.vertexData;
   delete render_op_.indexData;
@@ -163,6 +193,18 @@ void SplatCloud::buildIndexVBO()
   index_vbo_->setInstanceDataStepRate(1);
 
   render_op_.vertexData->vertexBufferBinding->setBinding(1, index_vbo_);
+
+#ifdef GSPLAT_USE_CUDA
+  if (use_cuda_) {
+    if (cuda_vbo_resource_) {
+      cudaGraphicsUnregisterResource(
+        reinterpret_cast<cudaGraphicsResource_t>(cuda_vbo_resource_));
+      cuda_vbo_resource_ = nullptr;
+      cuda_sorter_.destroy();
+    }
+    cuda_registration_pending_ = true;
+  }
+#endif
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -220,6 +262,16 @@ void SplatCloud::clear()
   sort_indices_.clear();
   upload_buf_.clear();
 
+#ifdef GSPLAT_USE_CUDA
+  if (cuda_vbo_resource_) {
+    cudaGraphicsUnregisterResource(
+      reinterpret_cast<cudaGraphicsResource_t>(cuda_vbo_resource_));
+    cuda_vbo_resource_ = nullptr;
+  }
+  cuda_sorter_.destroy();
+  cuda_registration_pending_ = false;
+#endif
+
   if (auto * node = getParentSceneNode()) {
     node->needUpdate();
   }
@@ -257,6 +309,44 @@ void SplatCloud::sortSplats()
   if (!vp) return;
   const Ogre::Camera * cam = vp->getCamera();
   if (!cam) return;
+
+#ifdef GSPLAT_USE_CUDA
+  if (use_cuda_ && cuda_vbo_resource_) {
+    auto res = reinterpret_cast<cudaGraphicsResource_t>(cuda_vbo_resource_);
+    void * mapped_ptr = nullptr;
+    size_t nbytes = 0;
+    bool gpu_sort_ok = false;
+
+    cudaError_t err = cudaGraphicsMapResources(1, &res, /*stream=*/0);
+    if (err != cudaSuccess) {
+      RCLCPP_ERROR_ONCE(
+        rclcpp::get_logger("gsplat_rviz_trials"),
+        "SplatCloud: cudaGraphicsMapResources failed (%s) — falling back to pdqsort",
+        cudaGetErrorString(err));
+    } else {
+      err = cudaGraphicsResourceGetMappedPointer(&mapped_ptr, &nbytes, res);
+      if (err != cudaSuccess || !mapped_ptr) {
+        RCLCPP_ERROR_ONCE(
+          rclcpp::get_logger("gsplat_rviz_trials"),
+          "SplatCloud: cudaGraphicsResourceGetMappedPointer failed (%s)",
+          cudaGetErrorString(err));
+      } else {
+        const Ogre::Vector3 fwd = cam->getDerivedDirection();
+        const float cam_fwd[3] = {fwd.x, fwd.y, fwd.z};
+        gpu_sort_ok = cuda_sorter_.sort(mapped_ptr, cam_fwd, splat_count_);
+        if (!gpu_sort_ok) {
+          RCLCPP_ERROR_ONCE(
+            rclcpp::get_logger("gsplat_rviz_trials"),
+            "SplatCloud: CUDA sort failed — falling back to pdqsort");
+        }
+      }
+      cudaGraphicsUnmapResources(1, &res, /*stream=*/0);
+    }
+
+    if (gpu_sort_ok) return;
+    // fall through to pdqsort
+  }
+#endif
 
   const Ogre::Vector3 fwd = cam->getDerivedDirection();
 
@@ -320,6 +410,52 @@ void SplatCloud::notifyRenderSingleObject(
   bool)
 {
   if (rend != this) return;
+
+#ifdef GSPLAT_USE_CUDA
+  if (cuda_registration_pending_ && use_cuda_ && index_vbo_) {
+    cuda_registration_pending_ = false;
+
+    // Verify that the current GL context has an associated CUDA device.
+    // This fails on Optimus/hybrid-GPU laptops where GL runs on the iGPU
+    // but CUDA runs on the dGPU — the two cannot share buffer objects.
+    unsigned int gl_device_count = 0;
+    int gl_device = -1;
+    cudaError_t gl_err = cudaGLGetDevices(
+      &gl_device_count, &gl_device, 1, cudaGLDeviceListAll);
+    if (gl_err != cudaSuccess || gl_device_count == 0) {
+      RCLCPP_ERROR(
+        rclcpp::get_logger("gsplat_rviz_trials"),
+        "SplatCloud: no CUDA device for current GL context (%s) — "
+        "GL is likely on the integrated GPU (Optimus); disabling GPU sort",
+        gl_err == cudaSuccess ? "no devices found" : cudaGetErrorString(gl_err));
+      use_cuda_ = false;
+    } else {
+      RCLCPP_INFO(
+        rclcpp::get_logger("gsplat_rviz_trials"),
+        "SplatCloud: CUDA-GL interop available on device %d", gl_device);
+
+      const uint32_t gl_buf_id = getGLBufferId(index_vbo_.get());
+      cudaGraphicsResource_t res;
+      cudaError_t err = cudaGraphicsGLRegisterBuffer(
+        &res, gl_buf_id, cudaGraphicsMapFlagsNone);
+      if (err != cudaSuccess) {
+        RCLCPP_ERROR(
+          rclcpp::get_logger("gsplat_rviz_trials"),
+          "SplatCloud: cudaGraphicsGLRegisterBuffer(buf=%u) failed (%s) — disabling GPU sort",
+          gl_buf_id, cudaGetErrorString(err));
+        use_cuda_ = false;
+      } else {
+        cuda_vbo_resource_ = res;
+        cuda_sorter_.init(splat_count_);
+        cuda_sorter_.uploadCenters(&centers_[0].x, splat_count_);
+        RCLCPP_INFO(
+          rclcpp::get_logger("gsplat_rviz_trials"),
+          "SplatCloud: CUDA-GL interop registered for %u splats (GL buf %u)",
+          splat_count_, gl_buf_id);
+      }
+    }
+  }
+#endif
 
   if (upload_pending_) {
     uploadTBO();
