@@ -13,6 +13,7 @@
 #include "rviz_common/properties/file_picker_property.hpp"
 #include "rviz_common/properties/float_property.hpp"
 #include "rviz_common/properties/int_property.hpp"
+#include "rviz_common/properties/property.hpp"
 #include "rviz_common/properties/ros_topic_property.hpp"
 #include "rviz_common/properties/vector_property.hpp"
 #include "gsplat_rviz_trials/splat_loaders/i_splat_source.hpp"
@@ -47,6 +48,8 @@ private Q_SLOTS:
   void onTopicChanged();
   void onSorterKindChanged();
   void onClipChanged();
+  void onTransparencyModeChanged();
+  void onWboitTuningChanged();
 
 private:
   enum class SourceKind { None, File, Topic };
@@ -56,6 +59,11 @@ private:
   void installSource(std::unique_ptr<ISplatSource> source, SourceKind kind);
   void onLoadResult(LoadResult result, SourceKind kind, uint64_t gen);
   SourceMode currentMode() const;
+
+  // Push transparency_mode_property_ → SplatCloud::setOitEnabled. The
+  // cloud owns the compositor lifecycle (attach/detach happens lazily
+  // during its render pass once a viewport is known).
+  void applyTransparencyMode();
 
   rviz_common::properties::EnumProperty *       source_mode_property_;
   rviz_common::properties::FilePickerProperty * splat_path_property_;
@@ -68,6 +76,13 @@ private:
   rviz_common::properties::BoolProperty *       clip_enabled_property_;
   rviz_common::properties::VectorProperty *     clip_min_property_;
   rviz_common::properties::VectorProperty *     clip_max_property_;
+
+  // Advanced — transparency fallback. Default is Sorted; WBOIT lives under
+  // an "Advanced" group because Sorted is the right answer for most users.
+  rviz_common::properties::EnumProperty *       transparency_mode_property_;
+  rviz_common::properties::FloatProperty *      wboit_weight_scale_property_;
+  rviz_common::properties::FloatProperty *      wboit_weight_exponent_property_;
+  rviz_common::properties::FloatProperty *      wboit_alpha_discard_property_;
 
   std::unique_ptr<SplatCloud>   splat_cloud_;
   std::unique_ptr<ISplatSource> source_;

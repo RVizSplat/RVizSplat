@@ -1,0 +1,35 @@
+fragment_program gsplat_rviz_trials/WboitAccum.frag glsl
+{
+    source wboit_accum.frag
+    default_params
+    {
+        param_named wboit_weight_scale    float 5.0
+        param_named wboit_weight_exponent float 2.0
+        param_named wboit_alpha_discard   float 0.01
+    }
+}
+
+fragment_program gsplat_rviz_trials/WboitReveal.frag glsl
+{
+    source wboit_reveal.frag
+}
+
+vertex_program gsplat_rviz_trials/WboitResolve.vert glsl
+{
+    source wboit_resolve.vert
+    default_params
+    {
+        param_named_auto worldViewProj worldviewproj_matrix
+    }
+}
+
+fragment_program gsplat_rviz_trials/WboitResolve.frag glsl
+{
+    source wboit_resolve.frag
+    default_params
+    {
+        param_named scene_tex  int 0
+        param_named accum_tex  int 1
+        param_named reveal_tex int 2
+    }
+}

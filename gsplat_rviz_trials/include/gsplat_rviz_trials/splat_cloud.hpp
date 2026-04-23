@@ -21,6 +21,7 @@ namespace Ogre
 class RenderQueue;
 class SceneManager;
 class SceneNode;
+class Viewport;
 }
 
 namespace gsplat_rviz_trials
@@ -77,6 +78,18 @@ public:
     clip_min_ = mn;
     clip_max_ = mx;
   }
+
+  // Switch between Sorted (false, default) and WBOIT (true) transparency.
+  // Setting this true triggers a deferred WBOIT-compositor attach on the
+  // next render pass (once a viewport is known); setting it false detaches.
+  // The per-frame depth sort is skipped while WBOIT is active since WBOIT
+  // is order-independent.
+  void setOitEnabled(bool v) { oit_enabled_ = v; }
+
+  // WBOIT weight-function knobs, pushed as fragment uniforms each frame.
+  void setWboitWeightScale(float v)    { wboit_weight_scale_    = v; }
+  void setWboitWeightExponent(float v) { wboit_weight_exponent_ = v; }
+  void setWboitAlphaDiscard(float v)   { wboit_alpha_discard_   = v; }
 
   // ── Ogre::MovableObject ────────────────────────────────────────────
   const Ogre::String & getMovableType() const override;
@@ -139,6 +152,20 @@ private:
   bool          clip_enabled_ = false;
   Ogre::Vector3 clip_min_{-1e9f, -1e9f, -1e9f};
   Ogre::Vector3 clip_max_{ 1e9f,  1e9f,  1e9f};
+
+  // Transparency state.
+  bool  oit_enabled_           = false;
+  float wboit_weight_scale_    = 5.0f;
+  float wboit_weight_exponent_ = 2.0f;
+  float wboit_alpha_discard_   = 0.01f;
+
+  // WBOIT compositor lifecycle. The compositor is attached lazily on the
+  // first _updateRenderQueue that sees (oit_enabled_ == true) AND a live
+  // viewport. `compositor_viewport_` is kept so we detach from the same
+  // viewport we attached to, even if the viewport ptr returned by the
+  // scene manager later changes.
+  Ogre::Viewport * compositor_viewport_ = nullptr;
+  bool             wboit_compositor_active_ = false;
 };
 
 }  // namespace gsplat_rviz_trials

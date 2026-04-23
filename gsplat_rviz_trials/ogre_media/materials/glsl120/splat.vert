@@ -30,8 +30,14 @@ uniform int           u_clip_enabled;
 uniform vec3          u_clip_min;
 uniform vec3          u_clip_max;
 
-out vec4 vColor;
-out vec2 vPosition;
+// Splat-tight forward-z warp bounds used by the WBOIT weight function.
+// Far = -1 signals "unset" → fragment shaders fall back to gl_FragCoord.z.
+uniform float         u_splat_z_near;
+uniform float         u_splat_z_far;
+
+out vec4  vColor;
+out vec2  vPosition;
+out float v_splat_z_warped;     // splat-center view-z warped into [0,1]
 
 // ── SH constants (Y_l^m coefficients) ──────────────────────────────────────
 const float SH_C1    =  0.4886025119029199;
@@ -170,6 +176,15 @@ void main()
     }
     vColor    = vec4(rgb, rgba.a);
     vPosition = vertex;
+
+    // Splat-tight warped depth in [0,1]; sentinel -1 if bounds unset.  Ogre
+    // view space looks down -Z, so forward distance is -camspace.z.  All four
+    // quad vertices share this value, so it interpolates to a constant per
+    // splat — exactly the per-splat depth WBOIT's weight function wants.
+    float z_span = u_splat_z_far - u_splat_z_near;
+    v_splat_z_warped = (z_span > 1e-3)
+        ? clamp((-camspace.z - u_splat_z_near) / z_span, 0.0, 1.0)
+        : -1.0;
 
     gl_Position = vec4(
         vCenter.xy + vertex.x * v1 + vertex.y * v2,

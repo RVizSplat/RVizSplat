@@ -90,13 +90,53 @@ GsplatDisplay::GsplatDisplay()
     "Clip Max", Ogre::Vector3(10.0f, 10.0f, 10.0f),
     "Maximum corner of the clip AABB.",
     clip_enabled_property_, SLOT(onClipChanged()), this);
+
+  // Advanced: transparency fallback.  Sorted is the exact, default path;
+  // WBOIT is an order-independent approximation kept here for cases where
+  // the sort is a bottleneck (very large CPU-sort clouds, fast camera
+  // motion, streaming splats).  Collapsed by default — most users stay on
+  // Sorted and never open this.
+  auto * advanced_group = new rviz_common::properties::Property(
+    "Advanced", QVariant(),
+    "Fallback transparency options. Sorted is the recommended default.",
+    this);
+  advanced_group->collapse();
+
+  transparency_mode_property_ = new rviz_common::properties::EnumProperty(
+    "Transparency Mode", "Sorted",
+    "Sorted = exact back-to-front. WBOIT = order-independent approximation.",
+    advanced_group, SLOT(onTransparencyModeChanged()), this);
+  transparency_mode_property_->addOption("Sorted", 0);
+  transparency_mode_property_->addOption("WBOIT",  1);
+
+  wboit_weight_scale_property_ = new rviz_common::properties::FloatProperty(
+    "WBOIT Weight Scale", 5.0f,
+    "Depth-discrimination strength in the WBOIT weight function.",
+    advanced_group, SLOT(onWboitTuningChanged()), this);
+  wboit_weight_scale_property_->setMin(0.1f);
+  wboit_weight_scale_property_->setMax(50.0f);
+
+  wboit_weight_exponent_property_ = new rviz_common::properties::FloatProperty(
+    "WBOIT Weight Exponent", 2.0f,
+    "Alpha-suppression power in the WBOIT weight function.",
+    advanced_group, SLOT(onWboitTuningChanged()), this);
+  wboit_weight_exponent_property_->setMin(0.5f);
+  wboit_weight_exponent_property_->setMax(6.0f);
+
+  wboit_alpha_discard_property_ = new rviz_common::properties::FloatProperty(
+    "WBOIT Alpha Discard", 0.01f,
+    "Fragment alpha cutoff in the WBOIT accumulation pass.",
+    advanced_group, SLOT(onWboitTuningChanged()), this);
+  wboit_alpha_discard_property_->setMin(0.0f);
+  wboit_alpha_discard_property_->setMax(0.1f);
 }
 
 GsplatDisplay::~GsplatDisplay()
 {
   // Drop the source before the cloud so any in-flight subscription callback
   // is torn down first. Bumping the generation ensures any already-queued
-  // main-thread delivery is dropped rather than run during teardown.
+  // main-thread delivery is dropped rather than run during teardown. The
+  // WBOIT compositor (if attached) is released by SplatCloud's destructor.
   ++source_gen_;
   source_.reset();
   source_kind_ = SourceKind::None;
@@ -111,8 +151,12 @@ void GsplatDisplay::onInitialize()
 
   topic_property_->initialize(context_->getRosNodeAbstraction());
 
-  // Seed the clip uniforms from the initial property values.
+  // Seed uniforms from the initial property values.  applyTransparencyMode
+  // runs here too, but compositor attachment is deferred until the first
+  // update() because the viewport isn't wired up yet.
   onClipChanged();
+  onWboitTuningChanged();
+  applyTransparencyMode();
 }
 
 void GsplatDisplay::onEnable()
@@ -122,6 +166,9 @@ void GsplatDisplay::onEnable()
   if (currentMode() == SourceMode::Topic) {
     onTopicChanged();
   }
+  // Re-apply transparency mode; if WBOIT was active before disable, the
+  // cloud's compositor attach is deferred to its next render pass.
+  applyTransparencyMode();
 }
 
 void GsplatDisplay::onDisable()
@@ -132,6 +179,10 @@ void GsplatDisplay::onDisable()
     source_.reset();
     source_kind_ = SourceKind::None;
   }
+  // Tell the cloud to stop WBOIT so it detaches the compositor on its
+  // next render pass. The user's Transparency Mode property is untouched,
+  // so onEnable's applyTransparencyMode() restores the previous state.
+  if (splat_cloud_) splat_cloud_->setOitEnabled(false);
 }
 
 void GsplatDisplay::reset()
@@ -260,6 +311,33 @@ void GsplatDisplay::onClipChanged()
   splat_cloud_->setClipBox(
     clip_min_property_->getVector(),
     clip_max_property_->getVector());
+  if (context_) context_->queueRender();
+}
+
+void GsplatDisplay::onTransparencyModeChanged()
+{
+  applyTransparencyMode();
+}
+
+void GsplatDisplay::onWboitTuningChanged()
+{
+  if (!splat_cloud_) return;
+  splat_cloud_->setWboitWeightScale(wboit_weight_scale_property_->getFloat());
+  splat_cloud_->setWboitWeightExponent(wboit_weight_exponent_property_->getFloat());
+  splat_cloud_->setWboitAlphaDiscard(wboit_alpha_discard_property_->getFloat());
+  if (context_) context_->queueRender();
+}
+
+void GsplatDisplay::applyTransparencyMode()
+{
+  const bool wboit = (transparency_mode_property_ &&
+                      transparency_mode_property_->getOptionInt() == 1);
+
+  // SplatCloud owns the compositor lifecycle. The toggle is flagged here;
+  // the actual attach/detach happens on the next render pass inside
+  // SplatCloud::_updateRenderQueue (needs a live viewport, which is only
+  // available from the render thread).
+  if (splat_cloud_) splat_cloud_->setOitEnabled(wboit);
   if (context_) context_->queueRender();
 }
 
