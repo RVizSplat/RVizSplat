@@ -1,4 +1,4 @@
-#include "gsplat_rviz_trials/ply_loader.hpp"
+#include "gsplat_rviz_trials/splat_loaders/ply_loader.hpp"
 
 #include <cmath>
 #include <cstring>

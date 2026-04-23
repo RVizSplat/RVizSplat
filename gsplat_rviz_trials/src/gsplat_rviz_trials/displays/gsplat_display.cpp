@@ -1,7 +1,7 @@
 #include "gsplat_rviz_trials/displays/gsplat_display.hpp"
 
 #include <algorithm>
-#include <cstdint>
+#include <utility>
 
 #include <QFileDialog>
 
@@ -12,7 +12,11 @@
 #include "rviz_common/display_context.hpp"
 #include "rviz_common/properties/status_property.hpp"
 
-#include "gsplat_rviz_trials/ply_loader.hpp"
+#include "gsplat_rviz_trials/sorters/i_splat_sorter.hpp"
+#include "gsplat_rviz_trials/sorters/sorter_factory.hpp"
+#include "gsplat_rviz_trials/splat_loaders/i_splat_source.hpp"
+#include "gsplat_rviz_trials/splat_loaders/ply_file_source.hpp"
+#include "gsplat_rviz_trials/splat_loaders/ros_topic_source.hpp"
 #include "gsplat_rviz_trials/splat_cloud.hpp"
 #include "gsplat_rviz_trials/splat_gpu.hpp"
 
@@ -20,63 +24,6 @@ namespace gsplat_rviz_trials
 {
 namespace displays
 {
-
-namespace
-{
-
-// Convert a SplatArray message into the plugin's GPU-ready struct layout.
-//
-// Wire format (produced by splat_publisher/ply_splat_publisher.py):
-//   pose.pose.pose.position            →  center[3]
-//   opacity (uint8, 0..255)            →  alpha = opacity / 255
-//   pose.pose.covariance (6x6 r-major) →  covA/covB from top-left 3x3
-//   spherical_harmonics (coef-major,
-//     RGB-interleaved: [R0,G0,B0,R1,…])→  sh[k][0..2] = RGB_k
-//
-// Assumes publisher conformance: uniform harmonics_deg across all splats,
-// deg ≤ 3 (SplatGPU::sh holds 16 coefficients), and spherical_harmonics
-// length == 3·(deg+1)².
-std::vector<SplatGPU> splatsFromMessage(
-  const splat_msgs::msg::SplatArray & msg, int & sh_degree_out)
-{
-  sh_degree_out = msg.splats.empty() ? 0 : static_cast<int>(msg.splats.front().harmonics_deg);
-  const int num_coefs = (sh_degree_out + 1) * (sh_degree_out + 1);
-
-  std::vector<SplatGPU> out;
-  out.reserve(msg.splats.size());
-
-  for (const auto & s : msg.splats) {
-    SplatGPU g{};
-
-    const auto & p = s.pose.pose.pose.position;
-    g.center[0] = static_cast<float>(p.x);
-    g.center[1] = static_cast<float>(p.y);
-    g.center[2] = static_cast<float>(p.z);
-
-    g.alpha = static_cast<float>(s.opacity) / 255.0f;
-
-    // 6x6 row-major → top-left 3x3
-    const auto & cov = s.pose.pose.covariance;
-    g.covA[0] = static_cast<float>(cov[0]);   // (0,0)
-    g.covA[1] = static_cast<float>(cov[1]);   // (0,1)
-    g.covA[2] = static_cast<float>(cov[2]);   // (0,2)
-    g.covB[0] = static_cast<float>(cov[7]);   // (1,1)
-    g.covB[1] = static_cast<float>(cov[8]);   // (1,2)
-    g.covB[2] = static_cast<float>(cov[14]);  // (2,2)
-
-    for (int k = 0; k < num_coefs; ++k) {
-      g.sh[k][0] = s.spherical_harmonics[3 * k + 0];
-      g.sh[k][1] = s.spherical_harmonics[3 * k + 1];
-      g.sh[k][2] = s.spherical_harmonics[3 * k + 2];
-      g.sh[k][3] = 0.0f;
-    }
-
-    out.push_back(g);
-  }
-  return out;
-}
-
-}  // namespace
 
 GsplatDisplay::GsplatDisplay()
 {
@@ -101,13 +48,24 @@ GsplatDisplay::GsplatDisplay()
     this, SLOT(onShDegreeChanged()), this);
   sh_degree_property_->setMin(0);
   sh_degree_property_->setMax(0);
+
+  sorter_kind_property_ = new rviz_common::properties::EnumProperty(
+    "Sort Backend", "Auto",
+    "Depth-sort backend. Auto picks CUDA when a device is available, else CPU.",
+    this, SLOT(onSorterKindChanged()), this);
+  sorter_kind_property_->addOption("Auto", static_cast<int>(SorterKind::Auto));
+  sorter_kind_property_->addOption("CPU",  static_cast<int>(SorterKind::Cpu));
+  sorter_kind_property_->addOption("CUDA", static_cast<int>(SorterKind::Cuda));
 }
 
 GsplatDisplay::~GsplatDisplay()
 {
-  // Tear the subscription down first so no callback races with the
-  // destruction of pending_msg_mutex_/pending_msg_.
-  unsubscribe();
+  // Drop the source before the sorter/cloud so any in-flight subscription
+  // callback is torn down first.
+  source_.reset();
+  // Detach sorter from cloud before either is destroyed.
+  if (splat_cloud_) splat_cloud_->setSorter(nullptr);
+  sorter_.reset();
 }
 
 void GsplatDisplay::onInitialize()
@@ -115,77 +73,64 @@ void GsplatDisplay::onInitialize()
   rviz_common::Display::onInitialize();
   splat_cloud_ = std::make_unique<SplatCloud>(scene_node_);
 
+  rebuildSorter();
+
   topic_property_->initialize(context_->getRosNodeAbstraction());
 }
 
 void GsplatDisplay::onEnable()
 {
-  subscribe();
+  // A topic may already be configured; re-create the subscription.
+  onTopicChanged();
 }
 
 void GsplatDisplay::onDisable()
 {
-  unsubscribe();
+  // Only drop the source if it's the ROS one — keep file data resident.
+  if (dynamic_cast<RosTopicSource *>(source_.get())) {
+    source_.reset();
+  }
 }
 
 void GsplatDisplay::update(
   std::chrono::nanoseconds /*wall_dt*/,
   std::chrono::nanoseconds /*ros_dt*/)
 {
-  applyPendingMessage();
+  pollSource();
 }
 
 void GsplatDisplay::reset()
 {
   rviz_common::Display::reset();
-  if (splat_cloud_) {
-    splat_cloud_->clear();
-  }
-  {
-    std::lock_guard<std::mutex> lock(pending_msg_mutex_);
-    pending_msg_.reset();
-  }
+  if (splat_cloud_) splat_cloud_->clear();
+  if (sorter_)      sorter_->reset();
+  centers_cache_.clear();
   sh_degree_property_->setMax(0);
   sh_degree_property_->setValue(0);
+  // Keep source_ alive: a live ROS subscription should continue delivering
+  // messages after a reset, matching the pre-refactor behaviour.
 }
 
 void GsplatDisplay::onSplatPathChanged()
 {
-  if (!scene_manager_ || !scene_node_ || !splat_cloud_) {
-    return;
-  }
-
-  splat_cloud_->clear();
+  if (!splat_cloud_) return;
 
   const QString path = splat_path_property_->getString();
   if (path.isEmpty()) {
+    source_.reset();
+    splat_cloud_->clear();
+    if (sorter_) sorter_->reset();
+    centers_cache_.clear();
     setStatus(
       rviz_common::properties::StatusProperty::Warn,
       "Splat File", "No file selected.");
     return;
   }
 
-  std::string error_msg;
-  int sh_degree = 0;
-  std::vector<SplatGPU> gaussians = loadPly(path.toStdString(), error_msg, sh_degree);
-
-  if (!error_msg.empty()) {
-    setStatus(
-      rviz_common::properties::StatusProperty::Error,
-      "Splat File", QString::fromStdString(error_msg));
-    return;
-  }
-
-  const int count = static_cast<int>(gaussians.size());
-  splat_cloud_->setSplats(std::move(gaussians), sh_degree);
-
-  sh_degree_property_->setMax(sh_degree);
-  sh_degree_property_->setValue(std::min(1, sh_degree));
-
-  setStatus(
-    rviz_common::properties::StatusProperty::Ok,
-    "Splat File",
-    QString("Loaded %1 gaussians").arg(count));
+  source_ = std::make_unique<PlyFileSource>(path.toStdString());
+  // PlyFileSource loads synchronously in its ctor; poll immediately so the
+  // user sees errors/data without waiting for the next update() tick.
+  pollSource();
 }
 
 void GsplatDisplay::onShDegreeChanged()
@@ -197,97 +142,108 @@ void GsplatDisplay::onShDegreeChanged()
 
 void GsplatDisplay::onTopicChanged()
 {
-  unsubscribe();
-  if (isEnabled()) {
-    subscribe();
-  }
-}
-
-void GsplatDisplay::subscribe()
-{
-  if (!context_ || subscription_) {
+  if (!isEnabled()) {
+    source_.reset();
     return;
   }
 
   const std::string topic = topic_property_->getTopicStd();
   if (topic.empty()) {
+    source_.reset();
     setStatus(
       rviz_common::properties::StatusProperty::Warn,
       "Topic", "No topic selected.");
     return;
   }
 
-  auto ros_node = context_->getRosNodeAbstraction().lock();
-  if (!ros_node) {
+  auto node_abs = context_ ? context_->getRosNodeAbstraction().lock() : nullptr;
+  if (!node_abs) {
     setStatus(
       rviz_common::properties::StatusProperty::Error,
       "Topic", "RViz ROS node unavailable.");
     return;
   }
 
-  // TRANSIENT_LOCAL matches the latched publisher so we receive the last
-  // message on late-subscribe; the executor runs in rviz_common.
-  rclcpp::QoS qos(1);
-  qos.reliable().transient_local();
-
-  try {
-    subscription_ = ros_node->get_raw_node()->create_subscription<splat_msgs::msg::SplatArray>(
-      topic, qos,
-      [this](splat_msgs::msg::SplatArray::ConstSharedPtr msg) {
-        this->splatArrayCallback(std::move(msg));
-      });
-  } catch (const std::exception & e) {
+  auto ros_source = std::make_unique<RosTopicSource>(
+    node_abs->get_raw_node(), topic);
+  if (!ros_source->initError().empty()) {
     setStatus(
       rviz_common::properties::StatusProperty::Error,
-      "Topic", QString("Subscription failed: %1").arg(e.what()));
+      "Topic", QString::fromStdString(ros_source->initError()));
     return;
   }
 
+  source_ = std::move(ros_source);
   setStatus(
     rviz_common::properties::StatusProperty::Ok,
     "Topic",
     QString("Subscribed to %1").arg(QString::fromStdString(topic)));
 }
 
-void GsplatDisplay::unsubscribe()
+void GsplatDisplay::onSorterKindChanged()
 {
-  subscription_.reset();
+  rebuildSorter();
 }
 
-void GsplatDisplay::splatArrayCallback(splat_msgs::msg::SplatArray::ConstSharedPtr msg)
+void GsplatDisplay::rebuildSorter()
 {
-  // Store only the latest message; apply on the main thread in update().
-  std::lock_guard<std::mutex> lock(pending_msg_mutex_);
-  pending_msg_ = std::move(msg);
-}
+  if (splat_cloud_) splat_cloud_->setSorter(nullptr);
 
-void GsplatDisplay::applyPendingMessage()
-{
-  splat_msgs::msg::SplatArray::ConstSharedPtr msg;
-  {
-    std::lock_guard<std::mutex> lock(pending_msg_mutex_);
-    msg.swap(pending_msg_);
+  const auto kind = static_cast<SorterKind>(
+    sorter_kind_property_ ? sorter_kind_property_->getOptionInt()
+                          : static_cast<int>(SorterKind::Auto));
+  sorter_ = makeSorter(kind);
+
+  if (!centers_cache_.empty()) {
+    sorter_->uploadCenters(centers_cache_);
   }
-  if (!msg || !splat_cloud_) {
+  if (splat_cloud_) splat_cloud_->setSorter(sorter_.get());
+}
+
+void GsplatDisplay::pollSource()
+{
+  if (!source_ || !splat_cloud_) return;
+
+  auto result = source_->poll();
+  if (!result) return;
+
+  // Determine status key from source type so file/topic statuses don't clobber each other.
+  const bool from_topic = (dynamic_cast<RosTopicSource *>(source_.get()) != nullptr);
+  const char * status_key = from_topic ? "Topic" : "Splat File";
+
+  if (!result->ok()) {
+    setStatus(
+      rviz_common::properties::StatusProperty::Error,
+      status_key, QString::fromStdString(result->error));
     return;
   }
 
-  int sh_degree = 0;
-  std::vector<SplatGPU> gaussians = splatsFromMessage(*msg, sh_degree);
-  const int count = static_cast<int>(gaussians.size());
+  const int count = static_cast<int>(result->splats.size());
+  const int sh_degree = result->sh_degree;
 
-  splat_cloud_->setSplats(std::move(gaussians), sh_degree);
+  centers_cache_.resize(result->splats.size());
+  for (size_t i = 0; i < result->splats.size(); ++i) {
+    const auto & s = result->splats[i];
+    centers_cache_[i] = Ogre::Vector3(s.center[0], s.center[1], s.center[2]);
+  }
+
+  if (sorter_) sorter_->uploadCenters(centers_cache_);
+  splat_cloud_->setSplats(std::move(result->splats), sh_degree);
 
   sh_degree_property_->setMax(sh_degree);
-  const int current = sh_degree_property_->getInt();
-  if (current > sh_degree) {
-    sh_degree_property_->setValue(sh_degree);
+  if (from_topic) {
+    const int current = sh_degree_property_->getInt();
+    if (current > sh_degree) sh_degree_property_->setValue(sh_degree);
+  } else {
+    sh_degree_property_->setValue(std::min(1, sh_degree));
   }
 
   setStatus(
     rviz_common::properties::StatusProperty::Ok,
-    "Topic",
-    QString("Received %1 gaussians (SH degree %2)").arg(count).arg(sh_degree));
+    status_key,
+    from_topic
+      ? QString("Received %1 gaussians (SH degree %2)").arg(count).arg(sh_degree)
+      : QString("Loaded %1 gaussians").arg(count));
 }
 
 }  // namespace displays

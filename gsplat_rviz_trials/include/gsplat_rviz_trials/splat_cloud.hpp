@@ -1,12 +1,7 @@
 #ifndef GSPLAT_RVIZ_TRIALS__SPLAT_CLOUD_HPP_
 #define GSPLAT_RVIZ_TRIALS__SPLAT_CLOUD_HPP_
 
-#include <array>
-#include <chrono>
-#include <condition_variable>
 #include <cstdint>
-#include <mutex>
-#include <thread>
 #include <vector>
 
 #include <OgreAxisAlignedBox.h>
@@ -20,10 +15,6 @@
 #include "gsplat_rviz_trials/splat_gpu.hpp"
 #include "gsplat_rviz_trials/visibility_control.hpp"
 
-#ifdef GSPLAT_USE_CUDA
-#include "gsplat_rviz_trials/cuda_sorter.hpp"
-#endif
-
 namespace Ogre
 {
 class RenderQueue;
@@ -33,6 +24,8 @@ class SceneNode;
 
 namespace gsplat_rviz_trials
 {
+
+class ISplatSorter;
 
 // Single MovableObject+Renderable that draws all Gaussian splats in one
 // instanced draw call.  Per-splat data lives in a GL_RGBA32F TBO; a
@@ -52,6 +45,10 @@ public:
   explicit SplatCloud(Ogre::SceneNode * parent_node);
   ~SplatCloud() override;
 
+  // Inject the depth-sort backend. Caller retains ownership; must outlive
+  // SplatCloud or be cleared with setSorter(nullptr) before destruction.
+  void setSorter(ISplatSorter * sorter) { sorter_ = sorter; }
+
   // Upload new splat data.  Safe to call from the main thread; TBO
   // creation is deferred to the first notifyRenderSingleObject() call
   // so the GL context is guaranteed to be current.
@@ -61,6 +58,12 @@ public:
   // Change the active SH degree at runtime (clamped to [0, max available]).
   void setShDegree(int d);
   int  getMaxShDegree() const { return max_sh_degree_; }
+
+  uint32_t getSplatCount() const { return splat_count_; }
+
+  // Write sorted indices into the per-instance VBO. Typically called from
+  // _updateRenderQueue() with a result from ISplatSorter::pollResult().
+  void applySort(const float * indices, uint32_t count);
 
   // ── Ogre::MovableObject ────────────────────────────────────────────
   const Ogre::String & getMovableType() const override;
@@ -90,8 +93,6 @@ private:
   void destroyTBO();
   void uploadTBO();       // must be called with GL context current
   void buildIndexVBO();   // allocates the per-instance index VBO
-  void sortWorkerMain();  // runs on sort_thread_; depth-sorts off the render thread
-  void waitForSortIdle(); // blocks until the worker is not mid-sort (for safe mutation of shared state)
 
   Ogre::MaterialPtr material_;
   Ogre::RenderOperation render_op_;
@@ -100,7 +101,7 @@ private:
 
   std::vector<SplatGPU> pending_splats_;
   bool upload_pending_ = false;
-  int max_sh_degree_    = 0;  // highest degree available in the loaded PLY data
+  int max_sh_degree_    = 0;  // highest degree available in the loaded data
   int active_sh_degree_ = 0;  // degree currently sent to the shader (user-controlled)
   int texels_per_splat_ = 0;  // compact base TBO = 2 uvec4 texels/splat (32 B)
   uint32_t splat_count_ = 0;
@@ -114,44 +115,7 @@ private:
 
   Ogre::HardwareVertexBufferSharedPtr index_vbo_;  // per-instance sorted indices
 
-  // Sorting state — persists between frames so pdqsort sees near-sorted input.
-  // Owned by the sort worker thread during steady state; only mutated on the
-  // main thread from setSplats()/clear() after waitForSortIdle() has drained
-  // any in-flight sort.
-  std::vector<Ogre::Vector3> centers_;      // splat centres (cache-friendly, separate from TBO data)
-  std::vector<float>         depth_keys_;   // depth per original splat index
-  std::vector<uint32_t>      sort_indices_; // sorted permutation, kept from last frame
-  std::vector<float>         upload_buf_;   // worker's back buffer — float cast of sort_indices_
-
-  // CPU-sort worker thread (fallback when CUDA is unavailable).
-  // The worker reads centres/sort_indices_/depth_keys_ and writes upload_buf_ without
-  // holding sort_mutex_; the mutex only protects the request/result hand-off below.
-  std::thread              sort_thread_;
-  std::mutex               sort_mutex_;
-  std::condition_variable  sort_wake_cv_;          // main → worker: new request / shutdown
-  std::condition_variable  sort_idle_cv_;          // worker → main: sort finished (for setSplats/clear/dtor)
-  bool                     sort_shutdown_        = false;
-  bool                     sort_request_pending_ = false;
-  bool                     sort_running_         = false;
-  bool                     sort_result_ready_    = false;
-  Ogre::Vector3            sort_req_fwd_;          // view direction requested by the main thread
-  std::vector<float>       upload_buf_front_;      // completed result, swapped out of upload_buf_
-  uint32_t                 front_count_          = 0;
-
-#ifdef GSPLAT_USE_CUDA
-  // CUDA fast path — active when a CUDA device is detected at construction.
-  bool       use_cuda_   = false;
-  CudaSorter cuda_sorter_;
-#endif
-
-  // Sort timing — 60-sample circular buffer, logged every 2 seconds.
-  static constexpr int kStatWindow = 60;
-  std::array<double, kStatWindow> sort_times_ms_{};
-  int    stat_head_  = 0;
-  int    stat_count_ = 0;
-  double stat_sum_   = 0.0;
-  std::chrono::steady_clock::time_point last_stats_log_;
-  void recordSortTime(double sort_ms, const char * method);
+  ISplatSorter * sorter_ = nullptr;  // not owned
 };
 
 }  // namespace gsplat_rviz_trials

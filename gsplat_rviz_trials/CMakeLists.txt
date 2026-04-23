@@ -56,8 +56,12 @@ endforeach()
 
 set(gsplat_rviz_trials_source_files
   src/gsplat_rviz_trials/displays/gsplat_display.cpp
-  src/gsplat_rviz_trials/ply_loader.cpp
   src/gsplat_rviz_trials/splat_cloud.cpp
+  src/gsplat_rviz_trials/sorters/cpu_sorter.cpp
+  src/gsplat_rviz_trials/sorters/sorter_factory.cpp
+  src/gsplat_rviz_trials/splat_loaders/ply_loader.cpp
+  src/gsplat_rviz_trials/splat_loaders/ply_file_source.cpp
+  src/gsplat_rviz_trials/splat_loaders/ros_topic_source.cpp
 )
 
 if(CUDAToolkit_FOUND)
@@ -68,7 +72,8 @@ if(CUDAToolkit_FOUND)
     set(CMAKE_CUDA_STANDARD_REQUIRED ON)
   endif()
   list(APPEND gsplat_rviz_trials_source_files
-    src/gsplat_rviz_trials/cuda_sorter.cu)
+    src/gsplat_rviz_trials/sorters/cuda_sorter.cu
+    src/gsplat_rviz_trials/sorters/cuda_splat_sorter.cpp)
 else()
   message(WARNING "gsplat [INFO]: CUDA toolkit not found — using CPU pdqsort fallback")
 endif()
