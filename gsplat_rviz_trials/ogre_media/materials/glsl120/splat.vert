@@ -21,7 +21,7 @@ uniform samplerBuffer u_sh;
 
 uniform mat4          view_matrix;
 uniform mat4          projectionMatrix;
-uniform vec3          cam_view_dir;
+uniform vec3          cam_pos_world;      // camera position in world space
 uniform int           sh_degree;
 
 out vec4 vColor;
@@ -148,9 +148,13 @@ void main()
     vec2 v2   = sqrt(max(2. * lambda2, 0.0)) * vec2(diag.y, -diag.x);
 
     // ── Colour: uint8 DC base, plus optional SH1..3 contribution ─────────────
+    // Per-splat view direction (3DGS / Inria convention).  Using a scene-wide
+    // `view_direction` auto-param would collapse SH to a constant argument and
+    // give the wrong colour at sh_degree > 0 for every splat not on-axis.
     vec3 rgb = rgba.rgb;
     if (sh_degree > 0) {
-        rgb = clamp(rgb + evalSHOrders1Plus(splat_id, cam_view_dir), 0.0, 1.0);
+        vec3 dir = normalize(center - cam_pos_world);
+        rgb = clamp(rgb + evalSHOrders1Plus(splat_id, dir), 0.0, 1.0);
     }
     vColor    = vec4(rgb, rgba.a);
     vPosition = vertex;
