@@ -10,6 +10,7 @@
 
 #include "pluginlib/class_list_macros.hpp"
 #include "rviz_common/display_context.hpp"
+#include "rviz_common/frame_manager_iface.hpp"
 #include "rviz_common/properties/status_property.hpp"
 
 #include "gsplat_rviz_trials/sorters/i_splat_sorter.hpp"
@@ -40,6 +41,15 @@ GsplatDisplay::GsplatDisplay()
     "splat_msgs/SplatArray topic to subscribe to. Each message replaces "
     "the currently displayed splats.",
     this, SLOT(onTopicChanged()), this);
+
+  reference_frame_property_ = new rviz_common::properties::TfFrameProperty(
+    "Reference Frame",
+    rviz_common::properties::TfFrameProperty::FIXED_FRAME_STRING,
+    "TF frame the splat cloud is anchored to.  Each tick we look up the "
+    "frame's pose in Fixed Frame and plant the cloud there.  Use any robot-"
+    "attached frame to see a captured scene move with the robot, or leave "
+    "at <Fixed Frame> for a world-locked reconstruction.",
+    this, nullptr, true);
 
   sh_degree_property_ = new rviz_common::properties::IntProperty(
     "SH Degree", 0,
@@ -76,6 +86,7 @@ void GsplatDisplay::onInitialize()
   rebuildSorter();
 
   topic_property_->initialize(context_->getRosNodeAbstraction());
+  reference_frame_property_->setFrameManager(context_->getFrameManager());
 }
 
 void GsplatDisplay::onEnable()
@@ -97,6 +108,26 @@ void GsplatDisplay::update(
   std::chrono::nanoseconds /*ros_dt*/)
 {
   pollSource();
+
+  // Pose the scene node at the Reference Frame's current pose in Fixed Frame.
+  if (scene_node_ && context_ && context_->getFrameManager()) {
+    const std::string frame = reference_frame_property_->getFrameStd();
+    Ogre::Vector3    position;
+    Ogre::Quaternion orientation;
+    if (context_->getFrameManager()->getTransform(frame, position, orientation)) {
+      scene_node_->setPosition(position);
+      scene_node_->setOrientation(orientation);
+      setStatus(
+        rviz_common::properties::StatusProperty::Ok,
+        "Reference Frame", "Transform OK");
+    } else {
+      setStatus(
+        rviz_common::properties::StatusProperty::Warn,
+        "Reference Frame",
+        QString("Frame '%1' not available in TF yet.")
+          .arg(QString::fromStdString(frame)));
+    }
+  }
 }
 
 void GsplatDisplay::reset()

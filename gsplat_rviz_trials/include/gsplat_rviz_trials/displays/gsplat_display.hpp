@@ -11,6 +11,7 @@
 #include "rviz_common/properties/file_picker_property.hpp"
 #include "rviz_common/properties/int_property.hpp"
 #include "rviz_common/properties/ros_topic_property.hpp"
+#include "rviz_common/properties/tf_frame_property.hpp"
 #include "gsplat_rviz_trials/visibility_control.hpp"
 
 namespace gsplat_rviz_trials
@@ -49,6 +50,7 @@ private:
 
   rviz_common::properties::FilePickerProperty * splat_path_property_;
   rviz_common::properties::RosTopicProperty *   topic_property_;
+  rviz_common::properties::TfFrameProperty *    reference_frame_property_;
   rviz_common::properties::IntProperty *        sh_degree_property_;
   rviz_common::properties::EnumProperty *       sorter_kind_property_;
 
