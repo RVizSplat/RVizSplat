@@ -6,7 +6,7 @@ material gsplat_rviz_trials/GaussianSplat
         {
             lighting off
             scene_blend one one_minus_src_alpha
-            depth_write off
+            depth_write on
             cull_hardware none
 
             vertex_program_ref gsplat_rviz_trials/Splat.vert

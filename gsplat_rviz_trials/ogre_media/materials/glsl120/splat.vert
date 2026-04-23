@@ -100,6 +100,10 @@ void main()
     float c12 = c1222.x, c22 = c1222.y;
 
     vec4 rgba = unpackUnorm4x8(t1.z);
+    if (rgba.a < 0.4) {
+        gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
+        return;
+    }
 
     // ── Project center ────────────────────────────────────────────────────────
     vec4 camspace = view_matrix * vec4(center, 1.0);

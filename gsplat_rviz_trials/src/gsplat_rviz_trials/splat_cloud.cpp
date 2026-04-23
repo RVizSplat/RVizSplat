@@ -432,7 +432,7 @@ void SplatCloud::_updateRenderQueue(Ogre::RenderQueue * queue)
         const double ms = std::chrono::duration<double, std::milli>(
           std::chrono::high_resolution_clock::now() - t0).count();
         recordSortTime(ms, "CUDA");
-        queue->addRenderable(this, 95u, mRenderQueuePriority);
+        queue->addRenderable(this, 50u, mRenderQueuePriority);
         return;
       }
       RCLCPP_ERROR_ONCE(
@@ -591,7 +591,7 @@ const Ogre::LightList & SplatCloud::getLights() const { return queryLights(); }
 
 void SplatCloud::notifyRenderSingleObject(
   Ogre::Renderable * rend,
-  const Ogre::Pass *,
+  const Ogre::Pass * pass,
   const Ogre::AutoParamDataSource *,
   const Ogre::LightList *,
   bool)
@@ -603,9 +603,12 @@ void SplatCloud::notifyRenderSingleObject(
     upload_pending_ = false;
   }
 
-  auto params = material_->getTechnique(0)->getPass(0)->getVertexProgramParameters();
-  if (params) {
-    params->setNamedConstant("sh_degree", active_sh_degree_);
+  // Use the pass being rendered so this works for both depth-prepass and colour-blend passes.
+  if (pass->hasVertexProgram()) {
+    auto params = pass->getVertexProgramParameters();
+    if (params) {
+      params->setNamedConstant("sh_degree", active_sh_degree_);
+    }
   }
 
   if (tbo_tex_) {
