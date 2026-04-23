@@ -20,9 +20,7 @@ material gsplat_rviz_trials/GaussianSplat
         }
     }
 
-    // WBOIT single-pass MRT scheme. Additive blend applies to both colour
-    // attachments — accum writes premultiplied colour, reveal_log writes
-    // -log(1-α). Resolve recovers revealage as exp(-sum).
+    // WBOIT accumulation scheme (compositor pass 2). Additive.
     technique wboit_accum
     {
         scheme wboit_accum
@@ -39,6 +37,28 @@ material gsplat_rviz_trials/GaussianSplat
             }
 
             fragment_program_ref gsplat_rviz_trials/WboitAccum.frag
+            {
+            }
+        }
+    }
+
+    // WBOIT revealage scheme (compositor pass 3). Multiplicative product of (1-α).
+    technique wboit_reveal
+    {
+        scheme wboit_reveal
+        pass
+        {
+            lighting off
+            scene_blend zero one_minus_src_colour
+            depth_write off
+            depth_check on
+            cull_hardware none
+
+            vertex_program_ref gsplat_rviz_trials/Splat.vert
+            {
+            }
+
+            fragment_program_ref gsplat_rviz_trials/WboitReveal.frag
             {
             }
         }

@@ -27,7 +27,7 @@ material gsplat_rviz_trials/WboitResolve
             {
                 filtering none
             }
-            texture_unit reveal_log_tex
+            texture_unit reveal_tex
             {
                 filtering none
             }
