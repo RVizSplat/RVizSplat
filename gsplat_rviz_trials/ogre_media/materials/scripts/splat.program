@@ -14,6 +14,9 @@ vertex_program gsplat_rviz_trials/Splat.vert glsl
         param_named      u_clip_enabled    int 0
         param_named      u_clip_min        float3 -1e9 -1e9 -1e9
         param_named      u_clip_max        float3  1e9  1e9  1e9
+        // Splat-tight depth warp for WBOIT; far = -1 → fallback to gl_FragCoord.z.
+        param_named      u_splat_z_near    float 0.0
+        param_named      u_splat_z_far     float -1.0
     }
 }
 

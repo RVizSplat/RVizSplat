@@ -5,13 +5,17 @@
 
 #include <QFileDialog>
 
+#include <OgreCamera.h>
 #include <OgreSceneManager.h>
 #include <OgreSceneNode.h>
+#include <OgreViewport.h>
 
 #include "pluginlib/class_list_macros.hpp"
 #include "rviz_common/display_context.hpp"
 #include "rviz_common/frame_manager_iface.hpp"
 #include "rviz_common/properties/status_property.hpp"
+#include "rviz_common/view_controller.hpp"
+#include "rviz_common/view_manager.hpp"
 
 #include "gsplat_rviz_trials/sorters/i_splat_sorter.hpp"
 #include "gsplat_rviz_trials/sorters/sorter_factory.hpp"
@@ -20,6 +24,7 @@
 #include "gsplat_rviz_trials/splat_loaders/ros_topic_source.hpp"
 #include "gsplat_rviz_trials/splat_cloud.hpp"
 #include "gsplat_rviz_trials/splat_gpu.hpp"
+#include "gsplat_rviz_trials/transparency/wboit_compositor.hpp"
 
 namespace gsplat_rviz_trials
 {
@@ -84,10 +89,54 @@ GsplatDisplay::GsplatDisplay()
     "Clip Max", Ogre::Vector3(10.0f, 10.0f, 10.0f),
     "Maximum corner of the clip AABB, in Reference Frame coordinates.",
     clip_enabled_property_, SLOT(onClipChanged()), this);
+
+  // Advanced: transparency fallback.  Sorted is the exact, default path;
+  // WBOIT is an order-independent approximation kept here for cases where
+  // the sort is a bottleneck (very large CPU-sort clouds, fast camera
+  // motion, streaming splats).  Collapsed by default — most users stay on
+  // Sorted and never open this.
+  auto * advanced_group = new rviz_common::properties::Property(
+    "Advanced", QVariant(),
+    "Fallback transparency options. Sorted is the recommended default.",
+    this);
+  advanced_group->collapse();
+
+  transparency_mode_property_ = new rviz_common::properties::EnumProperty(
+    "Transparency Mode", "Sorted",
+    "Sorted = exact back-to-front. WBOIT = order-independent approximation.",
+    advanced_group, SLOT(onTransparencyModeChanged()), this);
+  transparency_mode_property_->addOption("Sorted", 0);
+  transparency_mode_property_->addOption("WBOIT",  1);
+
+  wboit_weight_scale_property_ = new rviz_common::properties::FloatProperty(
+    "WBOIT Weight Scale", 5.0f,
+    "Depth-discrimination strength in the WBOIT weight function.",
+    advanced_group, SLOT(onWboitTuningChanged()), this);
+  wboit_weight_scale_property_->setMin(0.1f);
+  wboit_weight_scale_property_->setMax(50.0f);
+
+  wboit_weight_exponent_property_ = new rviz_common::properties::FloatProperty(
+    "WBOIT Weight Exponent", 2.0f,
+    "Alpha-suppression power in the WBOIT weight function.",
+    advanced_group, SLOT(onWboitTuningChanged()), this);
+  wboit_weight_exponent_property_->setMin(0.5f);
+  wboit_weight_exponent_property_->setMax(6.0f);
+
+  wboit_alpha_discard_property_ = new rviz_common::properties::FloatProperty(
+    "WBOIT Alpha Discard", 0.01f,
+    "Fragment alpha cutoff in the WBOIT accumulation pass.",
+    advanced_group, SLOT(onWboitTuningChanged()), this);
+  wboit_alpha_discard_property_->setMin(0.0f);
+  wboit_alpha_discard_property_->setMax(0.1f);
 }
 
 GsplatDisplay::~GsplatDisplay()
 {
+  // Detach the compositor before the viewport goes away.
+  if (wboit_compositor_active_) {
+    transparency::wboit_compositor::disable(compositor_viewport_);
+    wboit_compositor_active_ = false;
+  }
   // Drop the source before the sorter/cloud so any in-flight subscription
   // callback is torn down first.
   source_.reset();
@@ -106,14 +155,21 @@ void GsplatDisplay::onInitialize()
   topic_property_->initialize(context_->getRosNodeAbstraction());
   reference_frame_property_->setFrameManager(context_->getFrameManager());
 
-  // Seed the clip uniforms from the initial property values.
+  // Seed uniforms from the initial property values.  applyTransparencyMode
+  // runs here too, but compositor attachment is deferred until the first
+  // update() because the viewport isn't wired up yet.
   onClipChanged();
+  onWboitTuningChanged();
+  applyTransparencyMode();
 }
 
 void GsplatDisplay::onEnable()
 {
   // A topic may already be configured; re-create the subscription.
   onTopicChanged();
+  // Re-attach the compositor if WBOIT was active before the display was
+  // toggled off.
+  applyTransparencyMode();
 }
 
 void GsplatDisplay::onDisable()
@@ -122,6 +178,12 @@ void GsplatDisplay::onDisable()
   if (dynamic_cast<RosTopicSource *>(source_.get())) {
     source_.reset();
   }
+  // Detach the compositor while disabled so another display doesn't inherit
+  // our WBOIT passes on its viewport.
+  if (wboit_compositor_active_) {
+    transparency::wboit_compositor::disable(compositor_viewport_);
+    wboit_compositor_active_ = false;
+  }
 }
 
 void GsplatDisplay::update(
@@ -129,6 +191,21 @@ void GsplatDisplay::update(
   std::chrono::nanoseconds /*ros_dt*/)
 {
   pollSource();
+
+  // Capture the viewport on the first frame it's available so the transparency
+  // mode can attach the compositor.  Defers to the first update() because the
+  // compositor chain needs a live viewport that isn't wired up at onInitialize().
+  if (!compositor_viewport_ && context_ && context_->getViewManager()) {
+    if (auto * vc = context_->getViewManager()->getCurrent()) {
+      if (auto * cam = vc->getCamera()) {
+        compositor_viewport_ = cam->getViewport();
+        if (compositor_viewport_) {
+          transparency::wboit_compositor::ensureDefined();
+          applyTransparencyMode();
+        }
+      }
+    }
+  }
 
   // Pose the scene node at the Reference Frame's current pose in Fixed Frame.
   if (scene_node_ && context_ && context_->getFrameManager()) {
@@ -244,6 +321,40 @@ void GsplatDisplay::onClipChanged()
   splat_cloud_->setClipBox(
     clip_min_property_->getVector(),
     clip_max_property_->getVector());
+  if (context_) context_->queueRender();
+}
+
+void GsplatDisplay::onTransparencyModeChanged()
+{
+  applyTransparencyMode();
+}
+
+void GsplatDisplay::onWboitTuningChanged()
+{
+  if (!splat_cloud_) return;
+  splat_cloud_->setWboitWeightScale(wboit_weight_scale_property_->getFloat());
+  splat_cloud_->setWboitWeightExponent(wboit_weight_exponent_property_->getFloat());
+  splat_cloud_->setWboitAlphaDiscard(wboit_alpha_discard_property_->getFloat());
+  if (context_) context_->queueRender();
+}
+
+void GsplatDisplay::applyTransparencyMode()
+{
+  const bool wboit = (transparency_mode_property_ &&
+                      transparency_mode_property_->getOptionInt() == 1);
+
+  if (splat_cloud_) splat_cloud_->setOitEnabled(wboit);
+
+  // Compositor attach/detach (no-ops until the viewport is captured).
+  if (compositor_viewport_) {
+    if (wboit && !wboit_compositor_active_) {
+      transparency::wboit_compositor::enable(compositor_viewport_);
+      wboit_compositor_active_ = true;
+    } else if (!wboit && wboit_compositor_active_) {
+      transparency::wboit_compositor::disable(compositor_viewport_);
+      wboit_compositor_active_ = false;
+    }
+  }
   if (context_) context_->queueRender();
 }
 

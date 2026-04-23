@@ -1,5 +1,6 @@
 material gsplat_rviz_trials/GaussianSplat
 {
+    // Default technique: sorted back-to-front with premultiplied-alpha over.
     technique
     {
         pass
@@ -14,6 +15,50 @@ material gsplat_rviz_trials/GaussianSplat
             }
 
             fragment_program_ref gsplat_rviz_trials/Splat.frag
+            {
+            }
+        }
+    }
+
+    // WBOIT accumulation scheme (compositor pass 2). Additive.
+    technique wboit_accum
+    {
+        scheme wboit_accum
+        pass
+        {
+            lighting off
+            scene_blend one one
+            depth_write off
+            depth_check on
+            cull_hardware none
+
+            vertex_program_ref gsplat_rviz_trials/Splat.vert
+            {
+            }
+
+            fragment_program_ref gsplat_rviz_trials/WboitAccum.frag
+            {
+            }
+        }
+    }
+
+    // WBOIT revealage scheme (compositor pass 3). Multiplicative product of (1-α).
+    technique wboit_reveal
+    {
+        scheme wboit_reveal
+        pass
+        {
+            lighting off
+            scene_blend zero one_minus_src_colour
+            depth_write off
+            depth_check on
+            cull_hardware none
+
+            vertex_program_ref gsplat_rviz_trials/Splat.vert
+            {
+            }
+
+            fragment_program_ref gsplat_rviz_trials/WboitReveal.frag
             {
             }
         }

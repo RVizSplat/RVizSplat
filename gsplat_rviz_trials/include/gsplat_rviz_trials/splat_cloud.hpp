@@ -74,6 +74,15 @@ public:
     clip_max_ = mx;
   }
 
+  // When true, WBOIT is handling transparency and the per-frame depth sort
+  // is skipped (WBOIT is order-independent).
+  void setOitEnabled(bool v) { oit_enabled_ = v; }
+
+  // WBOIT weight-function knobs, pushed as fragment uniforms each frame.
+  void setWboitWeightScale(float v)    { wboit_weight_scale_    = v; }
+  void setWboitWeightExponent(float v) { wboit_weight_exponent_ = v; }
+  void setWboitAlphaDiscard(float v)   { wboit_alpha_discard_   = v; }
+
   // ── Ogre::MovableObject ────────────────────────────────────────────
   const Ogre::String & getMovableType() const override;
   const Ogre::AxisAlignedBox & getBoundingBox() const override { return bounds_; }
@@ -130,6 +139,12 @@ private:
   bool          clip_enabled_ = false;
   Ogre::Vector3 clip_min_{-1e9f, -1e9f, -1e9f};
   Ogre::Vector3 clip_max_{ 1e9f,  1e9f,  1e9f};
+
+  // Transparency state.
+  bool  oit_enabled_           = false;
+  float wboit_weight_scale_    = 5.0f;
+  float wboit_weight_exponent_ = 2.0f;
+  float wboit_alpha_discard_   = 0.01f;
 };
 
 }  // namespace gsplat_rviz_trials

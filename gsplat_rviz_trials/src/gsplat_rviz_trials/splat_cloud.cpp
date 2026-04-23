@@ -5,8 +5,10 @@
 
 #include <algorithm>
 #include <cstring>
+#include <limits>
 #include <numeric>
 
+#include <OgreAutoParamDataSource.h>
 #include <OgreCamera.h>
 #include <OgreHardwareBufferManager.h>
 #include <OgreMaterialManager.h>
@@ -322,7 +324,8 @@ void SplatCloud::_updateRenderQueue(Ogre::RenderQueue * queue)
 {
   if (splat_count_ == 0) return;
 
-  if (sorter_) {
+  // WBOIT is order-independent; skip the sort when it's active.
+  if (sorter_ && !oit_enabled_) {
     auto * vp = scene_manager_->getCurrentViewport();
     if (const Ogre::Camera * cam = vp ? vp->getCamera() : nullptr) {
       sorter_->requestSort(cam->getDerivedDirection());
@@ -332,7 +335,11 @@ void SplatCloud::_updateRenderQueue(Ogre::RenderQueue * queue)
     }
   }
 
-  queue->addRenderable(this, 50u, mRenderQueuePriority);
+  // Move the splat out of the opaque range when the WBOIT compositor is
+  // active so its pass-1 opaque scene (lastRenderQueue=94) skips the splats
+  // and passes 2-3 (first/last=95) can pick them up with the right scheme.
+  const uint8_t queue_group = oit_enabled_ ? 95u : 50u;
+  queue->addRenderable(this, queue_group, mRenderQueuePriority);
 }
 
 void SplatCloud::visitRenderables(Ogre::Renderable::Visitor * visitor, bool /*debug*/)
@@ -369,7 +376,7 @@ const Ogre::LightList & SplatCloud::getLights() const { return queryLights(); }
 void SplatCloud::notifyRenderSingleObject(
   Ogre::Renderable * rend,
   const Ogre::Pass * pass,
-  const Ogre::AutoParamDataSource *,
+  const Ogre::AutoParamDataSource * source,
   const Ogre::LightList *,
   bool)
 {
@@ -380,7 +387,32 @@ void SplatCloud::notifyRenderSingleObject(
     upload_pending_ = false;
   }
 
-  // Use the pass being rendered so this works for both depth-prepass and colour-blend passes.
+  // Splat-tight forward-z range in view space — WBOIT's weight function needs
+  // a meaningful [0,1] depth range instead of the ~[0.98, 0.9998] cluster you
+  // get from raw gl_FragCoord.z.  Sentinel (far = -1) → shader falls back to
+  // gl_FragCoord.z.
+  float splat_z_near = 0.0f;
+  float splat_z_far  = -1.0f;
+  if (oit_enabled_ && source && !bounds_.isNull()) {
+    const Ogre::Matrix4 & view = source->getViewMatrix();
+    const auto corners = bounds_.getAllCorners();
+    float z_min =  std::numeric_limits<float>::max();
+    float z_max = -std::numeric_limits<float>::max();
+    for (int i = 0; i < 8; ++i) {
+      const Ogre::Vector3 vc = view * corners[i];
+      const float fwd = -vc.z;   // Ogre view space: -Z forward
+      if (fwd < z_min) z_min = fwd;
+      if (fwd > z_max) z_max = fwd;
+    }
+    if (z_max > z_min + 1e-3f) {
+      const float span = z_max - z_min;
+      splat_z_near = std::max(0.0f, z_min - 0.05f * span);
+      splat_z_far  = z_max + 0.05f * span;
+    }
+  }
+
+  // Push per-frame uniforms on the pass being rendered.  setIgnoreMissingParams
+  // lets us fire the whole bundle regardless of which shader declares what.
   if (pass->hasVertexProgram()) {
     auto params = pass->getVertexProgramParameters();
     if (params) {
@@ -389,8 +421,19 @@ void SplatCloud::notifyRenderSingleObject(
       params->setNamedConstant("u_clip_enabled", clip_enabled_ ? 1 : 0);
       const Ogre::Vector4 cmin(clip_min_.x, clip_min_.y, clip_min_.z, 0.0f);
       const Ogre::Vector4 cmax(clip_max_.x, clip_max_.y, clip_max_.z, 0.0f);
-      params->setNamedConstant("u_clip_min", cmin);
-      params->setNamedConstant("u_clip_max", cmax);
+      params->setNamedConstant("u_clip_min",     cmin);
+      params->setNamedConstant("u_clip_max",     cmax);
+      params->setNamedConstant("u_splat_z_near", splat_z_near);
+      params->setNamedConstant("u_splat_z_far",  splat_z_far);
+    }
+  }
+  if (pass->hasFragmentProgram()) {
+    auto fp = pass->getFragmentProgramParameters();
+    if (fp) {
+      fp->setIgnoreMissingParams(true);
+      fp->setNamedConstant("wboit_weight_scale",    wboit_weight_scale_);
+      fp->setNamedConstant("wboit_weight_exponent", wboit_weight_exponent_);
+      fp->setNamedConstant("wboit_alpha_discard",   wboit_alpha_discard_);
     }
   }
 

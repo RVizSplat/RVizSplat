@@ -10,11 +10,18 @@
 #include "rviz_common/properties/bool_property.hpp"
 #include "rviz_common/properties/enum_property.hpp"
 #include "rviz_common/properties/file_picker_property.hpp"
+#include "rviz_common/properties/float_property.hpp"
 #include "rviz_common/properties/int_property.hpp"
+#include "rviz_common/properties/property.hpp"
 #include "rviz_common/properties/ros_topic_property.hpp"
 #include "rviz_common/properties/tf_frame_property.hpp"
 #include "rviz_common/properties/vector_property.hpp"
 #include "gsplat_rviz_trials/visibility_control.hpp"
+
+namespace Ogre
+{
+class Viewport;
+}
 
 namespace gsplat_rviz_trials
 {
@@ -46,10 +53,13 @@ private Q_SLOTS:
   void onTopicChanged();
   void onSorterKindChanged();
   void onClipChanged();
+  void onTransparencyModeChanged();
+  void onWboitTuningChanged();
 
 private:
   void rebuildSorter();
   void pollSource();
+  void applyTransparencyMode();
 
   rviz_common::properties::FilePickerProperty * splat_path_property_;
   rviz_common::properties::RosTopicProperty *   topic_property_;
@@ -62,12 +72,23 @@ private:
   rviz_common::properties::VectorProperty *     clip_min_property_;
   rviz_common::properties::VectorProperty *     clip_max_property_;
 
+  // Advanced — transparency fallback. Default is Sorted; WBOIT lives under
+  // an "Advanced" group because Sorted is the right answer for most users.
+  rviz_common::properties::EnumProperty *       transparency_mode_property_;
+  rviz_common::properties::FloatProperty *      wboit_weight_scale_property_;
+  rviz_common::properties::FloatProperty *      wboit_weight_exponent_property_;
+  rviz_common::properties::FloatProperty *      wboit_alpha_discard_property_;
+
   std::unique_ptr<SplatCloud>   splat_cloud_;
   std::unique_ptr<ISplatSorter> sorter_;
   std::unique_ptr<ISplatSource> source_;
 
   // Cached centres so the sorter can be rebuilt without re-loading data.
   std::vector<Ogre::Vector3> centers_cache_;
+
+  // Cached viewport pointer for compositor attach/detach across mode switches.
+  Ogre::Viewport * compositor_viewport_{nullptr};
+  bool             wboit_compositor_active_{false};
 };
 
 }  // namespace displays
