@@ -147,6 +147,17 @@ void main()
     vec2 v1   = sqrt(max(2. * lambda1, 0.0)) * diag;
     vec2 v2   = sqrt(max(2. * lambda2, 0.0)) * vec2(diag.y, -diag.x);
 
+    // Clamp projected eigen-axes.  The EWA Jacobian grows as 1/z_cam², so a
+    // splat near the near plane can rasterise a quad covering a large fraction
+    // of the framebuffer and tank framerate on close zoom.  Cap at 0.75 NDC
+    // half-extent (~720 px at 1080p), matching antimatter15/splat's 1024-px cap
+    // at 2K.
+    const float kMaxAxisNDC = 0.75;
+    float m1 = length(v1);
+    if (m1 > kMaxAxisNDC) v1 *= kMaxAxisNDC / m1;
+    float m2 = length(v2);
+    if (m2 > kMaxAxisNDC) v2 *= kMaxAxisNDC / m2;
+
     // ── Colour: uint8 DC base, plus optional SH1..3 contribution ─────────────
     // Per-splat view direction (3DGS / Inria convention).  Using a scene-wide
     // `view_direction` auto-param would collapse SH to a constant argument and
