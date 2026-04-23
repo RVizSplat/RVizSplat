@@ -15,4 +15,8 @@ vertex_program gsplat_rviz_trials/Splat.vert glsl
 fragment_program gsplat_rviz_trials/Splat.frag glsl
 {
     source splat.frag
+    default_params
+    {
+        param_named u_alpha_threshold float 0.05
+    }
 }

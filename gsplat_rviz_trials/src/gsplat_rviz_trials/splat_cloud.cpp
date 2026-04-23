@@ -388,6 +388,13 @@ void SplatCloud::notifyRenderSingleObject(
     }
   }
 
+  if (pass->hasFragmentProgram()) {
+    auto params = pass->getFragmentProgramParameters();
+    if (params && params->_findNamedConstantDefinition("u_alpha_threshold", false)) {
+      params->setNamedConstant("u_alpha_threshold", alpha_threshold_);
+    }
+  }
+
   if (tbo_tex_) {
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_BUFFER, tbo_tex_);
