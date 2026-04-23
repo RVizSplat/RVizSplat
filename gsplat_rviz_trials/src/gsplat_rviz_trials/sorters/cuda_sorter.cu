@@ -1,4 +1,4 @@
-#include "gsplat_rviz_trials/cuda_sorter.hpp"
+#include "gsplat_rviz_trials/sorters/cuda_sorter.hpp"
 
 #include <cstdio>
 
