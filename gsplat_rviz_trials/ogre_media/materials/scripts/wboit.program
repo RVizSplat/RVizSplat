@@ -9,11 +9,6 @@ fragment_program gsplat_rviz_trials/WboitAccum.frag glsl
     }
 }
 
-fragment_program gsplat_rviz_trials/WboitReveal.frag glsl
-{
-    source wboit_reveal.frag
-}
-
 vertex_program gsplat_rviz_trials/WboitResolve.vert glsl
 {
     source wboit_resolve.vert
@@ -28,8 +23,8 @@ fragment_program gsplat_rviz_trials/WboitResolve.frag glsl
     source wboit_resolve.frag
     default_params
     {
-        param_named scene_tex  int 0
-        param_named accum_tex  int 1
-        param_named reveal_tex int 2
+        param_named scene_tex      int 0
+        param_named accum_tex      int 1
+        param_named reveal_log_tex int 2
     }
 }

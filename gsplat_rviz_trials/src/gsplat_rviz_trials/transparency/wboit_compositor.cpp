@@ -30,13 +30,14 @@ void ensureDefined()
   auto * scene_td = tech->createTextureDefinition("scene_tex");
   scene_td->formatList.push_back(Ogre::PF_A8R8G8B8);
 
-  auto * accum_td = tech->createTextureDefinition("accum_tex");
-  accum_td->formatList.push_back(Ogre::PF_FLOAT16_RGBA);
+  // MRT: two colour attachments filled in a single splat-raster pass.
+  //   attachment 0 (accum)      — weighted colour + weight
+  //   attachment 1 (reveal_log) — additive Σ -log(1-α)
+  auto * mrt_td = tech->createTextureDefinition("wboit_mrt");
+  mrt_td->formatList.push_back(Ogre::PF_FLOAT16_RGBA);
+  mrt_td->formatList.push_back(Ogre::PF_FLOAT16_RGBA);
 
-  auto * reveal_td = tech->createTextureDefinition("reveal_tex");
-  reveal_td->formatList.push_back(Ogre::PF_FLOAT16_RGBA);
-
-  // Pass 1: opaque scene. Explicit depth clear — all three targets share the
+  // Pass 1: opaque scene. Explicit depth clear — all targets share the
   // viewport's depth buffer, so stale splat depth from frame N-1 would reject
   // opaque geometry on frame N without this.
   {
@@ -51,11 +52,12 @@ void ensureDefined()
     rp->setLastRenderQueue(94);
   }
 
-  // Pass 2: accumulation (additive).
+  // Pass 2: splats → MRT. Both attachments use additive blend (ONE/ONE),
+  // driven by the wboit_accum material scheme.
   {
     auto * tp = tech->createTargetPass();
     tp->setInputMode(Ogre::CompositionTargetPass::IM_NONE);
-    tp->setOutputName("accum_tex");
+    tp->setOutputName("wboit_mrt");
     tp->setMaterialScheme("wboit_accum");
     auto * cl = tp->createPass(Ogre::CompositionPass::PT_CLEAR);
     cl->setClearColour(Ogre::ColourValue(0, 0, 0, 0));
@@ -65,29 +67,15 @@ void ensureDefined()
     rp->setLastRenderQueue(95);
   }
 
-  // Pass 3: revealage. Cleared to 1; each fragment multiplies by (1-alpha).
-  {
-    auto * tp = tech->createTargetPass();
-    tp->setInputMode(Ogre::CompositionTargetPass::IM_NONE);
-    tp->setOutputName("reveal_tex");
-    tp->setMaterialScheme("wboit_reveal");
-    auto * cl = tp->createPass(Ogre::CompositionPass::PT_CLEAR);
-    cl->setClearColour(Ogre::ColourValue(1, 1, 1, 1));
-    cl->setClearBuffers(Ogre::FBT_COLOUR);
-    auto * rp = tp->createPass(Ogre::CompositionPass::PT_RENDERSCENE);
-    rp->setFirstRenderQueue(95);
-    rp->setLastRenderQueue(95);
-  }
-
-  // Pass 4: resolve over opaque scene via a full-screen quad.
+  // Pass 3: resolve over opaque scene via a full-screen quad.
   {
     auto * tp = tech->getOutputTargetPass();
     tp->setInputMode(Ogre::CompositionTargetPass::IM_NONE);
     auto * q = tp->createPass(Ogre::CompositionPass::PT_RENDERQUAD);
     q->setMaterialName("gsplat_rviz_trials/WboitResolve");
     q->setInput(0, "scene_tex");
-    q->setInput(1, "accum_tex");
-    q->setInput(2, "reveal_tex");
+    q->setInput(1, "wboit_mrt", 0);   // accum attachment
+    q->setInput(2, "wboit_mrt", 1);   // reveal_log attachment
   }
 
   comp->load();
