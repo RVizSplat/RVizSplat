@@ -458,7 +458,7 @@ void SplatCloud::_updateRenderQueue(Ogre::RenderQueue * queue)
   }
   sort_wake_cv_.notify_one();
 
-  queue->addRenderable(this, 95u, mRenderQueuePriority);
+  queue->addRenderable(this, 50u, mRenderQueuePriority);
 }
 
 // ── Sort worker ───────────────────────────────────────────────────────────────
