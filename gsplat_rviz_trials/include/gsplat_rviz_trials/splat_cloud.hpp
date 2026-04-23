@@ -65,6 +65,15 @@ public:
   // _updateRenderQueue() with a result from ISplatSorter::pollResult().
   void applySort(const float * indices, uint32_t count);
 
+  // Axis-aligned clip box in the scene_node_'s local frame.  Splats whose
+  // centre falls outside [min, max] are culled at the vertex stage.
+  void setClipEnabled(bool v) { clip_enabled_ = v; }
+  void setClipBox(const Ogre::Vector3 & mn, const Ogre::Vector3 & mx)
+  {
+    clip_min_ = mn;
+    clip_max_ = mx;
+  }
+
   // ── Ogre::MovableObject ────────────────────────────────────────────
   const Ogre::String & getMovableType() const override;
   const Ogre::AxisAlignedBox & getBoundingBox() const override { return bounds_; }
@@ -116,6 +125,11 @@ private:
   Ogre::HardwareVertexBufferSharedPtr index_vbo_;  // per-instance sorted indices
 
   ISplatSorter * sorter_ = nullptr;  // not owned
+
+  // ROI clip state (pushed as uniforms each frame).
+  bool          clip_enabled_ = false;
+  Ogre::Vector3 clip_min_{-1e9f, -1e9f, -1e9f};
+  Ogre::Vector3 clip_max_{ 1e9f,  1e9f,  1e9f};
 };
 
 }  // namespace gsplat_rviz_trials

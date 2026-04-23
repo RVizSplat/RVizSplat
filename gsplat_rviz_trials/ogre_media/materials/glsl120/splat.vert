@@ -24,6 +24,12 @@ uniform mat4          projectionMatrix;
 uniform vec3          cam_pos_world;      // camera position in world space
 uniform int           sh_degree;
 
+// ROI clip box (axis-aligned, in the scene_node_'s local frame which is the
+// Reference Frame's coordinates on the host side).
+uniform int           u_clip_enabled;
+uniform vec3          u_clip_min;
+uniform vec3          u_clip_max;
+
 out vec4 vColor;
 out vec2 vPosition;
 
@@ -90,6 +96,16 @@ void main()
     uvec4 t1 = texelFetch(u_splats, base + 1);
 
     vec3 center = uintBitsToFloat(t0.xyz);
+
+    // ROI clip: reject splats whose centre is outside [Clip Min, Clip Max].
+    // z = 2 places the quad past the far plane → rasteriser discards.
+    if (u_clip_enabled != 0) {
+        if (any(lessThan(center, u_clip_min)) ||
+            any(greaterThan(center, u_clip_max))) {
+            gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
+            return;
+        }
+    }
 
     vec2 c0001 = unpackHalf2x16(t0.w);
     vec2 c0211 = unpackHalf2x16(t1.x);
