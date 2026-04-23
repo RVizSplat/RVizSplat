@@ -569,7 +569,13 @@ void SplatCloud::notifyRenderSingleObject(
   if (pass->hasVertexProgram()) {
     auto params = pass->getVertexProgramParameters();
     if (params) {
-      params->setNamedConstant("sh_degree", active_sh_degree_);
+      params->setIgnoreMissingParams(true);
+      params->setNamedConstant("sh_degree",      active_sh_degree_);
+      params->setNamedConstant("u_clip_enabled", clip_enabled_ ? 1 : 0);
+      const Ogre::Vector4 cmin(clip_min_.x, clip_min_.y, clip_min_.z, 0.0f);
+      const Ogre::Vector4 cmax(clip_max_.x, clip_max_.y, clip_max_.z, 0.0f);
+      params->setNamedConstant("u_clip_min", cmin);
+      params->setNamedConstant("u_clip_max", cmax);
     }
   }
 

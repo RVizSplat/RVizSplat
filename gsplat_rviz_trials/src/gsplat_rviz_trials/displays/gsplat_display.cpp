@@ -72,6 +72,24 @@ GsplatDisplay::GsplatDisplay()
     this, SLOT(onSorterKindChanged()), this);
   sorter_kind_property_->addOption("CPU",  static_cast<int>(SorterKind::Cpu));
   sorter_kind_property_->addOption("CUDA", static_cast<int>(SorterKind::Cuda));
+
+  // ROI clip — axis-aligned box in the scene's local frame. Useful for
+  // trimming floaters, hiding ceilings on handheld captures, or isolating
+  // a workspace region.
+  clip_enabled_property_ = new rviz_common::properties::BoolProperty(
+    "Clip Box", false,
+    "Cull splats whose centre falls outside [Clip Min, Clip Max].",
+    this, SLOT(onClipChanged()), this);
+
+  clip_min_property_ = new rviz_common::properties::VectorProperty(
+    "Clip Min", Ogre::Vector3(-10.0f, -10.0f, -10.0f),
+    "Minimum corner of the clip AABB.",
+    clip_enabled_property_, SLOT(onClipChanged()), this);
+
+  clip_max_property_ = new rviz_common::properties::VectorProperty(
+    "Clip Max", Ogre::Vector3(10.0f, 10.0f, 10.0f),
+    "Maximum corner of the clip AABB.",
+    clip_enabled_property_, SLOT(onClipChanged()), this);
 }
 
 GsplatDisplay::~GsplatDisplay()
@@ -92,6 +110,9 @@ void GsplatDisplay::onInitialize()
   rebuildSorter();
 
   topic_property_->initialize(context_->getRosNodeAbstraction());
+
+  // Seed the clip uniforms from the initial property values.
+  onClipChanged();
 }
 
 void GsplatDisplay::onEnable()
@@ -230,6 +251,16 @@ void GsplatDisplay::onSourceModeChanged()
   } else {
     onTopicChanged();
   }
+}
+
+void GsplatDisplay::onClipChanged()
+{
+  if (!splat_cloud_) return;
+  splat_cloud_->setClipEnabled(clip_enabled_property_->getBool());
+  splat_cloud_->setClipBox(
+    clip_min_property_->getVector(),
+    clip_max_property_->getVector());
+  if (context_) context_->queueRender();
 }
 
 void GsplatDisplay::rebuildSorter()

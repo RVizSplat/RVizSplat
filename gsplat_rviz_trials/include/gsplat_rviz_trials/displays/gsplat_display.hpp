@@ -8,11 +8,13 @@
 #include <OgreVector3.h>
 
 #include "rviz_common/display.hpp"
+#include "rviz_common/properties/bool_property.hpp"
 #include "rviz_common/properties/enum_property.hpp"
 #include "rviz_common/properties/file_picker_property.hpp"
 #include "rviz_common/properties/float_property.hpp"
 #include "rviz_common/properties/int_property.hpp"
 #include "rviz_common/properties/ros_topic_property.hpp"
+#include "rviz_common/properties/vector_property.hpp"
 #include "gsplat_rviz_trials/splat_loaders/i_splat_source.hpp"
 #include "gsplat_rviz_trials/visibility_control.hpp"
 
@@ -44,6 +46,7 @@ private Q_SLOTS:
   void onAlphaThresholdChanged();
   void onTopicChanged();
   void onSorterKindChanged();
+  void onClipChanged();
 
 private:
   enum class SourceKind { None, File, Topic };
@@ -60,6 +63,11 @@ private:
   rviz_common::properties::IntProperty *        sh_degree_property_;
   rviz_common::properties::FloatProperty *      alpha_threshold_property_;
   rviz_common::properties::EnumProperty *       sorter_kind_property_;
+
+  // ROI clip — AABB in Reference Frame coordinates.
+  rviz_common::properties::BoolProperty *       clip_enabled_property_;
+  rviz_common::properties::VectorProperty *     clip_min_property_;
+  rviz_common::properties::VectorProperty *     clip_max_property_;
 
   std::unique_ptr<SplatCloud>   splat_cloud_;
   std::unique_ptr<ISplatSource> source_;
