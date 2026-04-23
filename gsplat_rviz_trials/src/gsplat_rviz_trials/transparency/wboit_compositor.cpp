@@ -33,7 +33,15 @@ void ensureDefined()
   // MRT: two colour attachments filled in a single splat-raster pass.
   //   attachment 0 (accum)      — weighted colour + weight
   //   attachment 1 (reveal_log) — additive Σ -log(1-α)
+  //
+  // Rendered at half the viewport's linear resolution (1/4 the pixel count)
+  // and bilinear-upsampled in the resolve quad.  For splat scenes the soft
+  // Gaussian edges absorb the loss; gains 2-3× on the OIT passes.
   auto * mrt_td = tech->createTextureDefinition("wboit_mrt");
+  mrt_td->width       = 0;     // 0 = use *Factor relative to viewport
+  mrt_td->height      = 0;
+  mrt_td->widthFactor  = 0.5f;
+  mrt_td->heightFactor = 0.5f;
   mrt_td->formatList.push_back(Ogre::PF_FLOAT16_RGBA);
   mrt_td->formatList.push_back(Ogre::PF_FLOAT16_RGBA);
 
