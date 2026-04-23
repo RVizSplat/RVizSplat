@@ -19,19 +19,17 @@ material gsplat_rviz_trials/WboitResolve
             }
 
             // Texture units bound by the compositor's "input" directives.
-            // scene_tex is 1:1 with output → nearest.  MRT attachments are
-            // half-res → bilinear upsample.
             texture_unit scene_tex
             {
                 filtering none
             }
             texture_unit accum_tex
             {
-                filtering linear linear none
+                filtering none
             }
             texture_unit reveal_log_tex
             {
-                filtering linear linear none
+                filtering none
             }
         }
     }
