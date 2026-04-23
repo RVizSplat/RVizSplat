@@ -22,9 +22,13 @@ find_package(rclcpp REQUIRED)
 find_package(rviz_common REQUIRED)
 find_package(rviz_rendering REQUIRED)
 find_package(rviz_ogre_vendor REQUIRED)
+find_package(splat_msgs REQUIRED)
 find_package(Boost REQUIRED)
 find_package(GLEW REQUIRED)
 find_package(CUDAToolkit QUIET)
+find_package(rosidl_default_runtime REQUIRED)
+find_package(rosidl_typesupport_cpp REQUIRED)
+find_package(rosidl_default_generators REQUIRED)
 
 # Avoid find_package(QT NAMES Qt6 Qt5 ...) due to CMake's default ascending path resolution
 find_package(Qt6 QUIET COMPONENTS Widgets)
@@ -89,6 +93,12 @@ target_link_libraries(gsplat_rviz_trials PUBLIC
   Boost::boost
 )
 
+#rosidl_get_typesupport_target(cpp_typesupport_target splat_msgs "rosidl_typesupport_cpp")
+target_link_libraries(gsplat_rviz_trials PUBLIC
+    splat_msgs::splat_msgs__rosidl_typesupport_cpp
+  ) 
+#target_link_libraries(gsplat_rviz_trials PUBLIC "${cpp_typesupport_target}")
+
 target_compile_definitions(gsplat_rviz_trials PRIVATE "GSPLAT_RVIZ_TRIALS_BUILDING_LIBRARY")
 
 if(CUDAToolkit_FOUND)
@@ -111,6 +121,7 @@ ament_export_dependencies(
   rviz_common
   rviz_ogre_vendor
   rviz_rendering
+  splat_msgs
   Qt${QT_VERSION_MAJOR}
 )
 

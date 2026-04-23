@@ -1,0 +1,4 @@
+geometry_msgs/PoseWithCovarianceStamped pose
+uint8 opacity
+uint8 harmonics_deg
+float32[] spherical_harmonics
