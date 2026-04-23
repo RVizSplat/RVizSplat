@@ -59,6 +59,8 @@ public:
   void setShDegree(int d);
   int  getMaxShDegree() const { return max_sh_degree_; }
 
+  void setAlphaThreshold(float t) { alpha_threshold_ = t; }
+
   uint32_t getSplatCount() const { return splat_count_; }
 
   // Write sorted indices into the per-instance VBO. Typically called from
@@ -103,6 +105,7 @@ private:
   bool upload_pending_ = false;
   int max_sh_degree_    = 0;  // highest degree available in the loaded data
   int active_sh_degree_ = 0;  // degree currently sent to the shader (user-controlled)
+  float alpha_threshold_ = 0.05f;
   int texels_per_splat_ = 0;  // compact base TBO = 2 uvec4 texels/splat (32 B)
   uint32_t splat_count_ = 0;
 

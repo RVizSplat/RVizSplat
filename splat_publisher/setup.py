@@ -6,7 +6,7 @@ from setuptools import find_packages, setup
 package_name = 'splat_publisher'
 
 splats_dir = os.path.join(os.path.dirname(__file__), '..', 'splats')
-ply_files = [os.path.relpath(p) for p in glob.glob(os.path.join(splats_dir, '*.ply'))]
+ply_files = glob.glob(os.path.join(splats_dir, '*.ply'))
 
 setup(
     name=package_name,

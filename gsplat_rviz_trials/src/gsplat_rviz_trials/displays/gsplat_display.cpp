@@ -49,6 +49,13 @@ GsplatDisplay::GsplatDisplay()
   sh_degree_property_->setMin(0);
   sh_degree_property_->setMax(0);
 
+  alpha_threshold_property_ = new rviz_common::properties::FloatProperty(
+    "Alpha Threshold", 0.05f,
+    "Splat fragments with opacity below this value are discarded.",
+    this, SLOT(onAlphaThresholdChanged()), this);
+  alpha_threshold_property_->setMin(0.0f);
+  alpha_threshold_property_->setMax(1.0f);
+
   sorter_kind_property_ = new rviz_common::properties::EnumProperty(
     "Sort Backend", "CUDA",
     "Depth-sort backend. Auto picks CUDA when a device is available, else CPU.",
@@ -137,6 +144,13 @@ void GsplatDisplay::onShDegreeChanged()
 {
   if (splat_cloud_) {
     splat_cloud_->setShDegree(sh_degree_property_->getInt());
+  }
+}
+
+void GsplatDisplay::onAlphaThresholdChanged()
+{
+  if (splat_cloud_) {
+    splat_cloud_->setAlphaThreshold(alpha_threshold_property_->getFloat());
   }
 }
 
