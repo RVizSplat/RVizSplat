@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <vector>
 
+#include "gsplat_rviz_trials/profiler.hpp"
+
 namespace gsplat_rviz_trials
 {
 
@@ -23,7 +25,10 @@ void CudaSplatSorter::requestSort(const Ogre::Vector3 & cam_fwd)
   if (count_ == 0 || failed_) return;
 
   const float fwd[3] = {cam_fwd.x, cam_fwd.y, cam_fwd.z};
-  if (!backend_.sort(fwd, count_)) {
+  Profiler::instance().start("cuda_sort");
+  const bool ok = backend_.sort(fwd, count_);
+  Profiler::instance().stop("cuda_sort");
+  if (!ok) {
     failed_ = true;
     return;
   }

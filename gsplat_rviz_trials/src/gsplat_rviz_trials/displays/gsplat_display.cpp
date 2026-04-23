@@ -50,7 +50,7 @@ GsplatDisplay::GsplatDisplay()
   sh_degree_property_->setMax(0);
 
   sorter_kind_property_ = new rviz_common::properties::EnumProperty(
-    "Sort Backend", "Auto",
+    "Sort Backend", "CUDA",
     "Depth-sort backend. Auto picks CUDA when a device is available, else CPU.",
     this, SLOT(onSorterKindChanged()), this);
   sorter_kind_property_->addOption("Auto", static_cast<int>(SorterKind::Auto));
