@@ -12,6 +12,9 @@
 #include "pluginlib/class_list_macros.hpp"
 #include "rviz_common/display_context.hpp"
 #include "rviz_common/properties/status_property.hpp"
+#include "rviz_common/render_panel.hpp"
+#include "rviz_common/visualization_manager.hpp"
+#include "rviz_rendering/render_window.hpp"
 
 #include "gsplat_rviz_trials/sorters/i_splat_sorter.hpp"
 #include "gsplat_rviz_trials/sorters/sorter_factory.hpp"
@@ -92,6 +95,30 @@ void GsplatDisplay::onInitialize()
   rebuildSorter();
 
   topic_property_->initialize(context_->getRosNodeAbstraction());
+<<<<<<< Updated upstream
+=======
+
+  // Evaluation hook: publish a std_msgs/String whose data is an output
+  // file path, and the next render of the main RenderPanel is dumped to
+  // disk. RViz spins its SingleThreadedExecutor from the GUI update loop
+  // (visualization_manager.cpp: executor_->spin_some), so this callback
+  // already runs on the GUI thread and can call captureScreenshot inline.
+  if (auto node_abs = context_->getRosNodeAbstraction().lock()) {
+    capture_sub_ = node_abs->get_raw_node()
+      ->create_subscription<std_msgs::msg::String>(
+        "~/gsplat_capture", 1,
+        [this](std_msgs::msg::String::ConstSharedPtr msg) {
+          captureScreenshot(msg->data);
+        });
+  }
+
+  // Seed uniforms from the initial property values.  applyTransparencyMode
+  // runs here too, but compositor attachment is deferred until the first
+  // update() because the viewport isn't wired up yet.
+  onClipChanged();
+  onWboitTuningChanged();
+  applyTransparencyMode();
+>>>>>>> Stashed changes
 }
 
 void GsplatDisplay::onEnable()
@@ -300,6 +327,21 @@ void GsplatDisplay::onLoadResult(
     kind == SourceKind::Topic
       ? QString("Received %1 gaussians (SH degree %2)").arg(count).arg(sh_degree)
       : QString("Loaded %1 gaussians").arg(count));
+}
+
+void GsplatDisplay::captureScreenshot(const std::string & path)
+{
+  // DisplayContext's public surface doesn't expose the RenderPanel, so we
+  // narrow to the concrete VisualizationManager. Same trick the visual
+  // testing framework uses; the PNG content matches the Ogre framebuffer
+  // (no Qt grabWindow / compositor distortion).
+  auto * vm = dynamic_cast<rviz_common::VisualizationManager *>(context_);
+  if (!vm) return;
+  auto * panel = vm->getRenderPanel();
+  if (!panel) return;
+  auto * win = panel->getRenderWindow();
+  if (!win) return;
+  win->captureScreenShot(path);
 }
 
 }  // namespace displays
