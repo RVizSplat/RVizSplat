@@ -27,6 +27,9 @@ namespace displays
 
 GsplatDisplay::GsplatDisplay()
 {
+  // Top-level properties — data source, mode selector, SH degree. Always
+  // visible; the two load paths (file and topic) are mutually exclusive at
+  // runtime but both shown so users can switch without re-opening a sub-group.
   source_mode_property_ = new rviz_common::properties::EnumProperty(
     "Source", "PLY File",
     "Where splats come from. Exactly one of the two source fields below is "
@@ -59,27 +62,59 @@ GsplatDisplay::GsplatDisplay()
   sh_degree_property_->setMin(0);
   sh_degree_property_->setMax(0);
 
+  buildAdvancedGroup();
+}
+
+// Advanced group layout (collapsed by default):
+//
+//   Advanced
+//   ├── Alpha Threshold
+//   ├── Sort Backend
+//   ├── Clip Box  (BoolProperty, expands to show Min/Max)
+//   │   ├── Clip Min
+//   │   └── Clip Max
+//   └── WBOIT  (sub-group, collapsed)
+//       ├── Transparency Mode
+//       ├── WBOIT Weight Scale
+//       ├── WBOIT Weight Exponent
+//       └── WBOIT Alpha Discard
+//
+// Grouping rationale: these are all tuning knobs that a user may want to
+// reach occasionally but don't belong in the top-level clutter. WBOIT is
+// nested one level deeper because it's a niche transparency mode — the
+// default Sorted path needs no tuning, so the WBOIT knobs stay out of view
+// unless the user explicitly opens the sub-group.
+void GsplatDisplay::buildAdvancedGroup()
+{
+  auto * advanced_group = new rviz_common::properties::Property(
+    "Advanced", QVariant(),
+    "Alpha threshold, sort backend, ROI clipping, and transparency fallback. "
+    "Defaults are sensible for most scenes.",
+    this);
+  advanced_group->collapse();
+
   alpha_threshold_property_ = new rviz_common::properties::FloatProperty(
     "Alpha Threshold", 0.05f,
     "Splat fragments with opacity below this value are discarded.",
-    this, SLOT(onAlphaThresholdChanged()), this);
+    advanced_group, SLOT(onAlphaThresholdChanged()), this);
   alpha_threshold_property_->setMin(0.0f);
   alpha_threshold_property_->setMax(1.0f);
 
   sorter_kind_property_ = new rviz_common::properties::EnumProperty(
     "Sort Backend", "CUDA",
     "Depth-sort backend. CUDA falls back to CPU if no device is available.",
-    this, SLOT(onSorterKindChanged()), this);
+    advanced_group, SLOT(onSorterKindChanged()), this);
   sorter_kind_property_->addOption("CPU",  static_cast<int>(SorterKind::Cpu));
   sorter_kind_property_->addOption("CUDA", static_cast<int>(SorterKind::Cuda));
 
   // ROI clip — axis-aligned box in the scene's local frame. Useful for
   // trimming floaters, hiding ceilings on handheld captures, or isolating
-  // a workspace region.
+  // a workspace region. The BoolProperty acts as its own parent: toggling
+  // it reveals/hides the Min/Max children.
   clip_enabled_property_ = new rviz_common::properties::BoolProperty(
     "Clip Box", false,
     "Cull splats whose centre falls outside [Clip Min, Clip Max].",
-    this, SLOT(onClipChanged()), this);
+    advanced_group, SLOT(onClipChanged()), this);
 
   clip_min_property_ = new rviz_common::properties::VectorProperty(
     "Clip Min", Ogre::Vector3(-10.0f, -10.0f, -10.0f),
@@ -91,42 +126,41 @@ GsplatDisplay::GsplatDisplay()
     "Maximum corner of the clip AABB.",
     clip_enabled_property_, SLOT(onClipChanged()), this);
 
-  // Advanced: transparency fallback.  Sorted is the exact, default path;
-  // WBOIT is an order-independent approximation kept here for cases where
-  // the sort is a bottleneck (very large CPU-sort clouds, fast camera
-  // motion, streaming splats).  Collapsed by default — most users stay on
-  // Sorted and never open this.
-  auto * advanced_group = new rviz_common::properties::Property(
-    "Advanced", QVariant(),
-    "Fallback transparency options. Sorted is the recommended default.",
-    this);
-  advanced_group->collapse();
+  // WBOIT sub-group. Collapsed so the WBOIT-specific knobs only show when
+  // the user opens them; Transparency Mode also lives here because
+  // enabling WBOIT is the entry point to the rest of the sub-group.
+  auto * wboit_group = new rviz_common::properties::Property(
+    "WBOIT", QVariant(),
+    "Order-independent transparency. Approximation; use when the sort is "
+    "a bottleneck (very large clouds, fast camera motion, streaming splats).",
+    advanced_group);
+  wboit_group->collapse();
 
   transparency_mode_property_ = new rviz_common::properties::EnumProperty(
     "Transparency Mode", "Sorted",
     "Sorted = exact back-to-front. WBOIT = order-independent approximation.",
-    advanced_group, SLOT(onTransparencyModeChanged()), this);
+    wboit_group, SLOT(onTransparencyModeChanged()), this);
   transparency_mode_property_->addOption("Sorted", 0);
   transparency_mode_property_->addOption("WBOIT",  1);
 
   wboit_weight_scale_property_ = new rviz_common::properties::FloatProperty(
     "WBOIT Weight Scale", 5.0f,
     "Depth-discrimination strength in the WBOIT weight function.",
-    advanced_group, SLOT(onWboitTuningChanged()), this);
+    wboit_group, SLOT(onWboitTuningChanged()), this);
   wboit_weight_scale_property_->setMin(0.1f);
   wboit_weight_scale_property_->setMax(50.0f);
 
   wboit_weight_exponent_property_ = new rviz_common::properties::FloatProperty(
     "WBOIT Weight Exponent", 2.0f,
     "Alpha-suppression power in the WBOIT weight function.",
-    advanced_group, SLOT(onWboitTuningChanged()), this);
+    wboit_group, SLOT(onWboitTuningChanged()), this);
   wboit_weight_exponent_property_->setMin(0.5f);
   wboit_weight_exponent_property_->setMax(6.0f);
 
   wboit_alpha_discard_property_ = new rviz_common::properties::FloatProperty(
     "WBOIT Alpha Discard", 0.01f,
     "Fragment alpha cutoff in the WBOIT accumulation pass.",
-    advanced_group, SLOT(onWboitTuningChanged()), this);
+    wboit_group, SLOT(onWboitTuningChanged()), this);
   wboit_alpha_discard_property_->setMin(0.0f);
   wboit_alpha_discard_property_->setMax(0.1f);
 }
