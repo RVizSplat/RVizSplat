@@ -1,7 +1,7 @@
 #ifndef GSPLAT_RVIZ_TRIALS__I_SPLAT_SOURCE_HPP_
 #define GSPLAT_RVIZ_TRIALS__I_SPLAT_SOURCE_HPP_
 
-#include <memory>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -22,11 +22,11 @@ struct LoadResult
 class ISplatSource
 {
 public:
+  using Callback = std::function<void(LoadResult)>;
+
   virtual ~ISplatSource() = default;
 
-  // Poll for new data. Returns a LoadResult (success or error) when one is
-  // ready, otherwise nullptr. Must be called from the main thread.
-  virtual std::unique_ptr<LoadResult> poll() = 0;
+  virtual void start(Callback cb) = 0;
 };
 
 }  // namespace gsplat_rviz_trials

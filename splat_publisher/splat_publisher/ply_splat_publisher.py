@@ -8,10 +8,11 @@ import numpy as np
 import rclpy
 from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import PoseWithCovarianceStamped
-from plyfile import PlyData
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from splat_msgs.msg import Splat, SplatArray
+
+from splat_publisher.ply_reader import read_ply_vertex
 
 
 def _sigmoid_vec(x: np.ndarray) -> np.ndarray:
@@ -51,10 +52,9 @@ def _compute_covariance(scales: np.ndarray, quats: np.ndarray) -> np.ndarray:
 
 
 def _load_splat_array(ply_path: str, sh_degree: int, stamp, frame_id: str) -> SplatArray:
-    plydata = PlyData.read(ply_path)
-    verts = plydata['vertex']
+    verts = read_ply_vertex(ply_path)
     n = len(verts)
-    prop_names = set(verts.data.dtype.names)
+    prop_names = set(verts.dtype.names)
 
     n_rest = sum(1 for p in prop_names if p.startswith('f_rest_'))
     # nrc: rest SH coefficients per channel (channel-major layout in PLY)

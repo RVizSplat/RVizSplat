@@ -4,6 +4,7 @@
 #include <utility>
 
 #include <QFileDialog>
+#include <QMetaObject>
 
 #include <OgreSceneManager.h>
 #include <OgreSceneNode.h>
@@ -14,7 +15,6 @@
 
 #include "gsplat_rviz_trials/sorters/i_splat_sorter.hpp"
 #include "gsplat_rviz_trials/sorters/sorter_factory.hpp"
-#include "gsplat_rviz_trials/splat_loaders/i_splat_source.hpp"
 #include "gsplat_rviz_trials/splat_loaders/ply_file_source.hpp"
 #include "gsplat_rviz_trials/splat_loaders/ros_topic_source.hpp"
 #include "gsplat_rviz_trials/splat_cloud.hpp"
@@ -27,6 +27,14 @@ namespace displays
 
 GsplatDisplay::GsplatDisplay()
 {
+  source_mode_property_ = new rviz_common::properties::EnumProperty(
+    "Source", "PLY File",
+    "Where splats come from. Exactly one of the two source fields below is "
+    "active at a time.",
+    this, SLOT(onSourceModeChanged()), this);
+  source_mode_property_->addOption("PLY File", static_cast<int>(SourceMode::File));
+  source_mode_property_->addOption("Topic",    static_cast<int>(SourceMode::Topic));
+
   splat_path_property_ = new rviz_common::properties::FilePickerProperty(
     "Splat File", "",
     "Path to a 3DGS-format PLY file to visualize.",
@@ -40,6 +48,8 @@ GsplatDisplay::GsplatDisplay()
     "splat_msgs/SplatArray topic to subscribe to. Each message replaces "
     "the currently displayed splats.",
     this, SLOT(onTopicChanged()), this);
+  // Default mode is PLY File — hide the topic field until the user flips it.
+  topic_property_->hide();
 
   sh_degree_property_ = new rviz_common::properties::IntProperty(
     "SH Degree", 0,
@@ -67,9 +77,11 @@ GsplatDisplay::GsplatDisplay()
 GsplatDisplay::~GsplatDisplay()
 {
   // Drop the source before the cloud so any in-flight subscription callback
-  // is torn down first. The cloud owns the sorter (via its scheduler) and
-  // will destroy it on the scheduler's worker thread.
+  // is torn down first. Bumping the generation ensures any already-queued
+  // main-thread delivery is dropped rather than run during teardown.
+  ++source_gen_;
   source_.reset();
+  source_kind_ = SourceKind::None;
 }
 
 void GsplatDisplay::onInitialize()
@@ -84,23 +96,21 @@ void GsplatDisplay::onInitialize()
 
 void GsplatDisplay::onEnable()
 {
-  // A topic may already be configured; re-create the subscription.
-  onTopicChanged();
+  // If the current mode is Topic, re-create the subscription (it was torn
+  // down on the previous onDisable). File mode persists across enable/disable.
+  if (currentMode() == SourceMode::Topic) {
+    onTopicChanged();
+  }
 }
 
 void GsplatDisplay::onDisable()
 {
   // Only drop the source if it's the ROS one — keep file data resident.
-  if (dynamic_cast<RosTopicSource *>(source_.get())) {
+  if (source_kind_ == SourceKind::Topic) {
+    ++source_gen_;
     source_.reset();
+    source_kind_ = SourceKind::None;
   }
-}
-
-void GsplatDisplay::update(
-  std::chrono::nanoseconds /*wall_dt*/,
-  std::chrono::nanoseconds /*ros_dt*/)
-{
-  pollSource();
 }
 
 void GsplatDisplay::reset()
@@ -115,11 +125,14 @@ void GsplatDisplay::reset()
 
 void GsplatDisplay::onSplatPathChanged()
 {
+  if (currentMode() != SourceMode::File) return;
   if (!splat_cloud_) return;
 
   const QString path = splat_path_property_->getString();
   if (path.isEmpty()) {
+    ++source_gen_;
     source_.reset();
+    source_kind_ = SourceKind::None;
     splat_cloud_->clear();
     setStatus(
       rviz_common::properties::StatusProperty::Warn,
@@ -127,10 +140,9 @@ void GsplatDisplay::onSplatPathChanged()
     return;
   }
 
-  source_ = std::make_unique<PlyFileSource>(path.toStdString());
-  // PlyFileSource loads synchronously in its ctor; poll immediately so the
-  // user sees errors/data without waiting for the next update() tick.
-  pollSource();
+  installSource(
+    std::make_unique<PlyFileSource>(path.toStdString()),
+    SourceKind::File);
 }
 
 void GsplatDisplay::onShDegreeChanged()
@@ -149,14 +161,20 @@ void GsplatDisplay::onAlphaThresholdChanged()
 
 void GsplatDisplay::onTopicChanged()
 {
+  if (currentMode() != SourceMode::Topic) return;
+
   if (!isEnabled()) {
+    ++source_gen_;
     source_.reset();
+    source_kind_ = SourceKind::None;
     return;
   }
 
   const std::string topic = topic_property_->getTopicStd();
   if (topic.empty()) {
+    ++source_gen_;
     source_.reset();
+    source_kind_ = SourceKind::None;
     setStatus(
       rviz_common::properties::StatusProperty::Warn,
       "Topic", "No topic selected.");
@@ -171,25 +189,47 @@ void GsplatDisplay::onTopicChanged()
     return;
   }
 
-  auto ros_source = std::make_unique<RosTopicSource>(
-    node_abs->get_raw_node(), topic);
-  if (!ros_source->initError().empty()) {
-    setStatus(
-      rviz_common::properties::StatusProperty::Error,
-      "Topic", QString::fromStdString(ros_source->initError()));
-    return;
-  }
-
-  source_ = std::move(ros_source);
-  setStatus(
-    rviz_common::properties::StatusProperty::Ok,
-    "Topic",
-    QString("Subscribed to %1").arg(QString::fromStdString(topic)));
+  installSource(
+    std::make_unique<RosTopicSource>(node_abs->get_raw_node(), topic),
+    SourceKind::Topic);
 }
 
 void GsplatDisplay::onSorterKindChanged()
 {
   rebuildSorter();
+}
+
+GsplatDisplay::SourceMode GsplatDisplay::currentMode() const
+{
+  return source_mode_property_
+    ? static_cast<SourceMode>(source_mode_property_->getOptionInt())
+    : SourceMode::File;
+}
+
+void GsplatDisplay::onSourceModeChanged()
+{
+  // Tear down the outgoing source and any visible state tied to it.
+  ++source_gen_;
+  source_.reset();
+  source_kind_ = SourceKind::None;
+  if (splat_cloud_) splat_cloud_->clear();
+  sh_degree_property_->setMax(0);
+  sh_degree_property_->setValue(0);
+
+  const auto mode = currentMode();
+  splat_path_property_->setHidden(mode != SourceMode::File);
+  topic_property_->setHidden(mode != SourceMode::Topic);
+
+  // Drop any stale status from the other source so only the active one's
+  // status is visible in the panel.
+  deleteStatus(mode == SourceMode::File ? "Topic" : "Splat File");
+
+  // Activate the newly-selected source if its field already has a value.
+  if (mode == SourceMode::File) {
+    onSplatPathChanged();
+  } else {
+    onTopicChanged();
+  }
 }
 
 void GsplatDisplay::rebuildSorter()
@@ -202,32 +242,52 @@ void GsplatDisplay::rebuildSorter()
   splat_cloud_->setSorter(makeSorter(kind));
 }
 
-void GsplatDisplay::pollSource()
+void GsplatDisplay::installSource(
+  std::unique_ptr<ISplatSource> source, SourceKind kind)
 {
-  if (!source_ || !splat_cloud_) return;
+  // Replace the current source atomically from the main thread's perspective:
+  // bump the generation first so any queued delivery from the outgoing source
+  // is dropped, then tear it down, then wire the new one.
+  const uint64_t gen = ++source_gen_;
+  source_.reset();
+  source_kind_ = kind;
+  source_ = std::move(source);
 
-  auto result = source_->poll();
-  if (!result) return;
+  source_->start(
+    [this, kind, gen](LoadResult r) {
+      // AutoConnection: direct call on the display's thread (PLY case),
+      // queued post from the ROS executor thread otherwise.
+      QMetaObject::invokeMethod(
+        this,
+        [this, kind, gen, r = std::move(r)]() mutable {
+          onLoadResult(std::move(r), kind, gen);
+        });
+    });
+}
 
-  // Determine status key from source type so file/topic statuses don't clobber each other.
-  const bool from_topic = (dynamic_cast<RosTopicSource *>(source_.get()) != nullptr);
-  const char * status_key = from_topic ? "Topic" : "Splat File";
+void GsplatDisplay::onLoadResult(
+  LoadResult result, SourceKind kind, uint64_t gen)
+{
+  if (gen != source_gen_ || !splat_cloud_) return;
 
-  if (!result->ok()) {
+  const char * status_key =
+    (kind == SourceKind::Topic) ? "Topic" : "Splat File";
+
+  if (!result.ok()) {
     setStatus(
       rviz_common::properties::StatusProperty::Error,
-      status_key, QString::fromStdString(result->error));
+      status_key, QString::fromStdString(result.error));
     return;
   }
 
-  const int count = static_cast<int>(result->splats.size());
-  const int sh_degree = result->sh_degree;
+  const int count = static_cast<int>(result.splats.size());
+  const int sh_degree = result.sh_degree;
 
   // SplatCloud extracts centres internally and forwards them to the sort worker.
-  splat_cloud_->setSplats(std::move(result->splats), sh_degree);
+  splat_cloud_->setSplats(std::move(result.splats), sh_degree);
 
   sh_degree_property_->setMax(sh_degree);
-  if (from_topic) {
+  if (kind == SourceKind::Topic) {
     const int current = sh_degree_property_->getInt();
     if (current > sh_degree) sh_degree_property_->setValue(sh_degree);
   } else {
@@ -237,7 +297,7 @@ void GsplatDisplay::pollSource()
   setStatus(
     rviz_common::properties::StatusProperty::Ok,
     status_key,
-    from_topic
+    kind == SourceKind::Topic
       ? QString("Received %1 gaussians (SH degree %2)").arg(count).arg(sh_degree)
       : QString("Loaded %1 gaussians").arg(count));
 }
