@@ -28,6 +28,7 @@ jobs:
             --from-paths ros_ws/src \
             --ignore-src \
             --rosdistro rolling \
+            --skip-keys ament_python \
             -y
         env:
           DEBIAN_FRONTEND: noninteractive
