@@ -58,21 +58,18 @@ GsplatDisplay::GsplatDisplay()
 
   sorter_kind_property_ = new rviz_common::properties::EnumProperty(
     "Sort Backend", "CUDA",
-    "Depth-sort backend. Auto picks CUDA when a device is available, else CPU.",
+    "Depth-sort backend. CUDA falls back to CPU if no device is available.",
     this, SLOT(onSorterKindChanged()), this);
-  sorter_kind_property_->addOption("Auto", static_cast<int>(SorterKind::Auto));
   sorter_kind_property_->addOption("CPU",  static_cast<int>(SorterKind::Cpu));
   sorter_kind_property_->addOption("CUDA", static_cast<int>(SorterKind::Cuda));
 }
 
 GsplatDisplay::~GsplatDisplay()
 {
-  // Drop the source before the sorter/cloud so any in-flight subscription
-  // callback is torn down first.
+  // Drop the source before the cloud so any in-flight subscription callback
+  // is torn down first. The cloud owns the sorter (via its scheduler) and
+  // will destroy it on the scheduler's worker thread.
   source_.reset();
-  // Detach sorter from cloud before either is destroyed.
-  if (splat_cloud_) splat_cloud_->setSorter(nullptr);
-  sorter_.reset();
 }
 
 void GsplatDisplay::onInitialize()
@@ -110,8 +107,6 @@ void GsplatDisplay::reset()
 {
   rviz_common::Display::reset();
   if (splat_cloud_) splat_cloud_->clear();
-  if (sorter_)      sorter_->reset();
-  centers_cache_.clear();
   sh_degree_property_->setMax(0);
   sh_degree_property_->setValue(0);
   // Keep source_ alive: a live ROS subscription should continue delivering
@@ -126,8 +121,6 @@ void GsplatDisplay::onSplatPathChanged()
   if (path.isEmpty()) {
     source_.reset();
     splat_cloud_->clear();
-    if (sorter_) sorter_->reset();
-    centers_cache_.clear();
     setStatus(
       rviz_common::properties::StatusProperty::Warn,
       "Splat File", "No file selected.");
@@ -201,17 +194,12 @@ void GsplatDisplay::onSorterKindChanged()
 
 void GsplatDisplay::rebuildSorter()
 {
-  if (splat_cloud_) splat_cloud_->setSorter(nullptr);
+  if (!splat_cloud_) return;
 
   const auto kind = static_cast<SorterKind>(
     sorter_kind_property_ ? sorter_kind_property_->getOptionInt()
-                          : static_cast<int>(SorterKind::Auto));
-  sorter_ = makeSorter(kind);
-
-  if (!centers_cache_.empty()) {
-    sorter_->uploadCenters(centers_cache_);
-  }
-  if (splat_cloud_) splat_cloud_->setSorter(sorter_.get());
+                          : static_cast<int>(SorterKind::Cuda));
+  splat_cloud_->setSorter(makeSorter(kind));
 }
 
 void GsplatDisplay::pollSource()
@@ -235,13 +223,7 @@ void GsplatDisplay::pollSource()
   const int count = static_cast<int>(result->splats.size());
   const int sh_degree = result->sh_degree;
 
-  centers_cache_.resize(result->splats.size());
-  for (size_t i = 0; i < result->splats.size(); ++i) {
-    const auto & s = result->splats[i];
-    centers_cache_[i] = Ogre::Vector3(s.center[0], s.center[1], s.center[2]);
-  }
-
-  if (sorter_) sorter_->uploadCenters(centers_cache_);
+  // SplatCloud extracts centres internally and forwards them to the sort worker.
   splat_cloud_->setSplats(std::move(result->splats), sh_degree);
 
   sh_degree_property_->setMax(sh_degree);

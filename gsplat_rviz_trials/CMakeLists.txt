@@ -73,8 +73,7 @@ if(CUDAToolkit_FOUND)
     set(CMAKE_CUDA_STANDARD_REQUIRED ON)
   endif()
   list(APPEND gsplat_rviz_trials_source_files
-    src/gsplat_rviz_trials/sorters/cuda_sorter.cu
-    src/gsplat_rviz_trials/sorters/cuda_splat_sorter.cpp)
+    src/gsplat_rviz_trials/sorters/cuda_sorter.cu)
 else()
   message(WARNING "gsplat [INFO]: CUDA toolkit not found — using CPU pdqsort fallback")
 endif()
