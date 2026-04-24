@@ -1,4 +1,4 @@
-#include "gsplat_rviz_trials/transparency/wboit_compositor.hpp"
+#include "gsplat_rviz_trials/wboit/wboit_compositor.hpp"
 
 #include <OgreResource.h>
 #include <OgreCompositor.h>

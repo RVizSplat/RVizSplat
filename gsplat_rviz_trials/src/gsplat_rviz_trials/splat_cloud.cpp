@@ -26,6 +26,7 @@
 
 #include "gsplat_rviz_trials/sorters/i_splat_sorter.hpp"
 #include "gsplat_rviz_trials/perf_monitor.hpp"
+#include "gsplat_rviz_trials/wboit/wboit_compositor.hpp"
 
 namespace gsplat_rviz_trials
 {
