@@ -34,7 +34,12 @@ void ensureDefined()
   accum_td->formatList.push_back(Ogre::PF_FLOAT16_RGBA);
 
   auto * reveal_td = tech->createTextureDefinition("reveal_tex");
-  reveal_td->formatList.push_back(Ogre::PF_FLOAT16_RGBA);
+  // Scalar attachment: the fragment shader writes revealage (a single
+  // float) and the resolve shader samples .r only. Using PF_FLOAT16_R
+  // instead of PF_FLOAT16_RGBA cuts this attachment's write/read
+  // bandwidth by 4× — a significant win on integrated GPUs where
+  // system-memory bandwidth limits the WBOIT pipeline.
+  reveal_td->formatList.push_back(Ogre::PF_FLOAT16_R);
 
   // Pass 1: opaque scene. Explicit depth clear — all three targets share the
   // viewport's depth buffer, so stale splat depth from frame N-1 would reject
