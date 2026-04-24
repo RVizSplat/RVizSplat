@@ -17,6 +17,11 @@ vertex_program gsplat_rviz_trials/Splat.vert glsl
         // Splat-tight depth warp for WBOIT; far = -1 → fallback to gl_FragCoord.z.
         param_named      u_splat_z_near    float 0.0
         param_named      u_splat_z_far     float -1.0
+        // Sub-pixel splat cull. viewport_size is Ogre's auto-param
+        // (width_px, height_px, 1/width, 1/height); u_min_px_extent is
+        // user-tunable from the display panel. 0 disables the cull.
+        param_named_auto viewport_size     viewport_size
+        param_named      u_min_px_extent   float 0.5
     }
 }
 

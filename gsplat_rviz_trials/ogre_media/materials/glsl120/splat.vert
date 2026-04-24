@@ -34,6 +34,18 @@ uniform vec3          u_clip_max;
 uniform float         u_splat_z_near;
 uniform float         u_splat_z_far;
 
+// Ogre auto-param: viewport_size = (width_px, height_px, 1/width, 1/height).
+// Used by the sub-pixel cull below to convert NDC half-axes to pixel extent.
+uniform vec4          viewport_size;
+
+// Sub-pixel cull threshold, in pixels. A splat whose larger projected
+// half-axis (in pixel space) falls below this contributes at most a single
+// sub-pixel fragment with tiny alpha — invisible after the fragment
+// shader's Gaussian + discard. Culling it in the VS saves the
+// rasterisation + 2× fragment cost on the WBOIT path (accum + reveal).
+// 0 disables the cull.
+uniform float         u_min_px_extent;
+
 out vec4  vColor;
 out vec2  vPosition;
 out float v_splat_z_warped;     // splat-center view-z warped into [0,1]
@@ -178,6 +190,21 @@ void main()
     if (m1 > kMaxAxisNDC) v1 *= kMaxAxisNDC / m1;
     float m2 = length(v2);
     if (m2 > kMaxAxisNDC) v2 *= kMaxAxisNDC / m2;
+
+    // Sub-pixel cull. v1, v2 are now in NDC half-axis form; convert each
+    // component to pixels (NDC=1 spans half the viewport). We use the
+    // max of the two axes' pixel magnitudes — if both eigen-axes are
+    // below one pixel the Gaussian rasterises to at most a single
+    // sub-pixel fragment whose alpha is attenuated by exp(-r²) at the
+    // centre and clipped by the fragment shader's discard.
+    if (u_min_px_extent > 0.0) {
+        vec2 v1_px = vec2(v1.x * viewport_size.x, v1.y * viewport_size.y) * 0.5;
+        vec2 v2_px = vec2(v2.x * viewport_size.x, v2.y * viewport_size.y) * 0.5;
+        if (max(length(v1_px), length(v2_px)) < u_min_px_extent) {
+            gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
+            return;
+        }
+    }
 
     // ── Colour: uint8 DC base, plus optional SH1..3 contribution ─────────────
     // Per-splat view direction (3DGS / Inria convention).  Using a scene-wide
