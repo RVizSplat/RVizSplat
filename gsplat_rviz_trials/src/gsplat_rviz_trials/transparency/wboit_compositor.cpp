@@ -9,6 +9,8 @@
 #include <OgrePixelFormat.h>
 #include <OgreViewport.h>
 
+#include <iostream>  // TODO(wboit-debug): remove after MRT issue diagnosed
+
 namespace gsplat_rviz_trials
 {
 namespace transparency
@@ -99,6 +101,8 @@ void ensureDefined()
   }
 
   comp->load();
+  std::cerr << "[WBOIT-DBG] ensureDefined OK isLoaded="
+            << comp->isLoaded() << std::endl;
 }
 
 void enable(Ogre::Viewport * viewport)
@@ -106,10 +110,18 @@ void enable(Ogre::Viewport * viewport)
   if (!viewport) return;
   auto & mgr = Ogre::CompositorManager::getSingleton();
   try {
-    if (!mgr.addCompositor(viewport, kName)) return;
+    auto * inst = mgr.addCompositor(viewport, kName);
+    if (!inst) {
+      std::cerr << "[WBOIT-DBG] addCompositor returned null — compositor not registered?"
+                << std::endl;
+      return;
+    }
     mgr.setCompositorEnabled(viewport, kName, true);
-  } catch (const Ogre::Exception &) {
-    // Swallow — caller can surface the failure via its own status path.
+    std::cerr << "[WBOIT-DBG] compositor enabled on viewport "
+              << viewport << std::endl;
+  } catch (const Ogre::Exception & e) {
+    std::cerr << "[WBOIT-DBG] Ogre::Exception in enable(): "
+              << e.getFullDescription() << std::endl;
   }
 }
 
