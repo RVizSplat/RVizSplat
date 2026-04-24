@@ -1,0 +1,66 @@
+material gsplat_rviz_plugin/GaussianSplat
+{
+    // Default technique: sorted back-to-front with premultiplied-alpha over.
+    technique
+    {
+        pass
+        {
+            lighting off
+            scene_blend one one_minus_src_alpha
+            depth_write on
+            cull_hardware none
+
+            vertex_program_ref gsplat_rviz_plugin/Splat.vert
+            {
+            }
+
+            fragment_program_ref gsplat_rviz_plugin/Splat.frag
+            {
+            }
+        }
+    }
+
+    // WBOIT accumulation scheme (compositor pass 2). Additive.
+    technique wboit_accum
+    {
+        scheme wboit_accum
+        pass
+        {
+            lighting off
+            scene_blend one one
+            depth_write off
+            depth_check on
+            cull_hardware none
+
+            vertex_program_ref gsplat_rviz_plugin/Splat.vert
+            {
+            }
+
+            fragment_program_ref gsplat_rviz_plugin/WboitAccum.frag
+            {
+            }
+        }
+    }
+
+    // WBOIT revealage scheme (compositor pass 3). Multiplicative product of (1-α).
+    technique wboit_reveal
+    {
+        scheme wboit_reveal
+        pass
+        {
+            lighting off
+            scene_blend zero one_minus_src_colour
+            depth_write off
+            depth_check on
+            cull_hardware none
+
+            vertex_program_ref gsplat_rviz_plugin/Splat.vert
+            {
+            }
+
+            fragment_program_ref gsplat_rviz_plugin/WboitReveal.frag
+            {
+            }
+        }
+    }
+}
