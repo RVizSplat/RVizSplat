@@ -64,55 +64,42 @@ LoadResult splatsFromMessage(const splat_msgs::msg::SplatArray & msg)
 RosTopicSource::RosTopicSource(
   rclcpp::Node::SharedPtr node,
   const std::string & topic)
-{
-  if (!node) {
-    init_error_ = "ROS node unavailable.";
-    return;
-  }
-  if (topic.empty()) {
-    init_error_ = "No topic selected.";
-    return;
-  }
-
-  // TRANSIENT_LOCAL matches the latched publisher so late subscribers receive
-  // the most recent message immediately.
-  rclcpp::QoS qos(1);
-  qos.reliable().transient_local();
-
-  try {
-    subscription_ = node->create_subscription<splat_msgs::msg::SplatArray>(
-      topic, qos,
-      [this](splat_msgs::msg::SplatArray::ConstSharedPtr msg) {
-        this->callback(std::move(msg));
-      });
-  } catch (const std::exception & e) {
-    init_error_ = std::string("Subscription failed: ") + e.what();
-  }
-}
+: node_(std::move(node)), topic_(topic) {}
 
 RosTopicSource::~RosTopicSource()
 {
   subscription_.reset();
 }
 
-void RosTopicSource::callback(splat_msgs::msg::SplatArray::ConstSharedPtr msg)
+void RosTopicSource::start(Callback cb)
 {
-  std::lock_guard<std::mutex> lock(mutex_);
-  pending_msg_ = std::move(msg);
-}
+  if (!cb) return;
+  callback_ = std::move(cb);
 
-std::unique_ptr<LoadResult> RosTopicSource::poll()
-{
-  splat_msgs::msg::SplatArray::ConstSharedPtr msg;
-  {
-    std::lock_guard<std::mutex> lock(mutex_);
-    msg.swap(pending_msg_);
+  if (!node_) {
+    LoadResult r; r.error = "ROS node unavailable.";
+    callback_(std::move(r));
+    return;
   }
-  if (!msg) return nullptr;
+  if (topic_.empty()) {
+    LoadResult r; r.error = "No topic selected.";
+    callback_(std::move(r));
+    return;
+  }
 
-  auto r = std::make_unique<LoadResult>();
-  *r = splatsFromMessage(*msg);
-  return r;
+  rclcpp::QoS qos(1);
+  qos.reliable().transient_local();
+
+  try {
+    subscription_ = node_->create_subscription<splat_msgs::msg::SplatArray>(
+      topic_, qos,
+      [this](splat_msgs::msg::SplatArray::ConstSharedPtr msg) {
+        callback_(splatsFromMessage(*msg));
+      });
+  } catch (const std::exception & e) {
+    LoadResult r; r.error = std::string("Subscription failed: ") + e.what();
+    callback_(std::move(r));
+  }
 }
 
 }  // namespace gsplat_rviz_trials

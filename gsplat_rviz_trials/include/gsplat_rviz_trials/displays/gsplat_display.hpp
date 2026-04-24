@@ -1,6 +1,7 @@
 #ifndef GSPLAT_RVIZ_TRIALS__DISPLAYS__GSPLAT_DISPLAY_HPP_
 #define GSPLAT_RVIZ_TRIALS__DISPLAYS__GSPLAT_DISPLAY_HPP_
 
+#include <cstdint>
 #include <memory>
 #include <vector>
 
@@ -12,11 +13,11 @@
 #include "rviz_common/properties/float_property.hpp"
 #include "rviz_common/properties/int_property.hpp"
 #include "rviz_common/properties/ros_topic_property.hpp"
+#include "gsplat_rviz_trials/splat_loaders/i_splat_source.hpp"
 #include "gsplat_rviz_trials/visibility_control.hpp"
 
 namespace gsplat_rviz_trials
 {
-class ISplatSource;
 class SplatCloud;
 
 namespace displays
@@ -34,10 +35,10 @@ protected:
   void onInitialize() override;
   void onEnable() override;
   void onDisable() override;
-  void update(std::chrono::nanoseconds wall_dt, std::chrono::nanoseconds ros_dt) override;
   void reset() override;
 
 private Q_SLOTS:
+  void onSourceModeChanged();
   void onSplatPathChanged();
   void onShDegreeChanged();
   void onAlphaThresholdChanged();
@@ -45,9 +46,15 @@ private Q_SLOTS:
   void onSorterKindChanged();
 
 private:
-  void rebuildSorter();
-  void pollSource();
+  enum class SourceKind { None, File, Topic };
+  enum class SourceMode { File = 0, Topic = 1 };
 
+  void rebuildSorter();
+  void installSource(std::unique_ptr<ISplatSource> source, SourceKind kind);
+  void onLoadResult(LoadResult result, SourceKind kind, uint64_t gen);
+  SourceMode currentMode() const;
+
+  rviz_common::properties::EnumProperty *       source_mode_property_;
   rviz_common::properties::FilePickerProperty * splat_path_property_;
   rviz_common::properties::RosTopicProperty *   topic_property_;
   rviz_common::properties::IntProperty *        sh_degree_property_;
@@ -56,6 +63,12 @@ private:
 
   std::unique_ptr<SplatCloud>   splat_cloud_;
   std::unique_ptr<ISplatSource> source_;
+  SourceKind                    source_kind_ = SourceKind::None;
+  // Bumped each time source_ is (re)assigned or cleared. Queued main-thread
+  // deliveries from a prior source compare the captured generation against
+  // the current one and drop if stale — prevents an in-flight callback from
+  // clobbering state after the user switches topic/file.
+  uint64_t                      source_gen_  = 0;
 };
 
 }  // namespace displays

@@ -11,7 +11,6 @@
   <exec_depend>splat_msgs</exec_depend>
   <exec_depend>geometry_msgs</exec_depend>
   <exec_depend>python3-numpy</exec_depend>
-  <exec_depend>python3-plyfile</exec_depend>
 
   <buildtool_depend>ament_python</buildtool_depend>
 
