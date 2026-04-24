@@ -24,8 +24,7 @@ uniform mat4          projectionMatrix;
 uniform vec3          cam_pos_world;      // camera position in world space
 uniform int           sh_degree;
 
-// ROI clip box (axis-aligned, in the scene_node_'s local frame which is the
-// Reference Frame's coordinates on the host side).
+// ROI clip box (axis-aligned, in the scene_node_'s local frame).
 uniform int           u_clip_enabled;
 uniform vec3          u_clip_min;
 uniform vec3          u_clip_max;

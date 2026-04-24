@@ -14,7 +14,6 @@
 #include "rviz_common/properties/int_property.hpp"
 #include "rviz_common/properties/property.hpp"
 #include "rviz_common/properties/ros_topic_property.hpp"
-#include "rviz_common/properties/tf_frame_property.hpp"
 #include "rviz_common/properties/vector_property.hpp"
 #include "gsplat_rviz_trials/visibility_control.hpp"
 
@@ -63,11 +62,10 @@ private:
 
   rviz_common::properties::FilePickerProperty * splat_path_property_;
   rviz_common::properties::RosTopicProperty *   topic_property_;
-  rviz_common::properties::TfFrameProperty *    reference_frame_property_;
   rviz_common::properties::IntProperty *        sh_degree_property_;
   rviz_common::properties::EnumProperty *       sorter_kind_property_;
 
-  // ROI clip — AABB in Reference Frame coordinates.
+  // ROI clip — AABB in the scene's local frame.
   rviz_common::properties::BoolProperty *       clip_enabled_property_;
   rviz_common::properties::VectorProperty *     clip_min_property_;
   rviz_common::properties::VectorProperty *     clip_max_property_;

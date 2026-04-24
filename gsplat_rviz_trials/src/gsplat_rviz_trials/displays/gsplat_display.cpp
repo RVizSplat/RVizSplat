@@ -12,7 +12,6 @@
 
 #include "pluginlib/class_list_macros.hpp"
 #include "rviz_common/display_context.hpp"
-#include "rviz_common/frame_manager_iface.hpp"
 #include "rviz_common/properties/status_property.hpp"
 #include "rviz_common/view_controller.hpp"
 #include "rviz_common/view_manager.hpp"
@@ -47,15 +46,6 @@ GsplatDisplay::GsplatDisplay()
     "the currently displayed splats.",
     this, SLOT(onTopicChanged()), this);
 
-  reference_frame_property_ = new rviz_common::properties::TfFrameProperty(
-    "Reference Frame",
-    rviz_common::properties::TfFrameProperty::FIXED_FRAME_STRING,
-    "TF frame the splat cloud is anchored to.  Each tick we look up the "
-    "frame's pose in Fixed Frame and plant the cloud there.  Use any robot-"
-    "attached frame to see a captured scene move with the robot, or leave "
-    "at <Fixed Frame> for a world-locked reconstruction.",
-    this, nullptr, true);
-
   sh_degree_property_ = new rviz_common::properties::IntProperty(
     "SH Degree", 0,
     "Spherical harmonics degree used for view-dependent colour (0 = DC only). "
@@ -72,7 +62,7 @@ GsplatDisplay::GsplatDisplay()
   sorter_kind_property_->addOption("CPU",  static_cast<int>(SorterKind::Cpu));
   sorter_kind_property_->addOption("CUDA", static_cast<int>(SorterKind::Cuda));
 
-  // ROI clip — axis-aligned box in the Reference Frame's coordinates.
+  // ROI clip — axis-aligned box in the scene's local frame.
   // Useful daily for trimming floaters, hiding ceilings on handheld captures,
   // or isolating a workspace region.
   clip_enabled_property_ = new rviz_common::properties::BoolProperty(
@@ -82,12 +72,12 @@ GsplatDisplay::GsplatDisplay()
 
   clip_min_property_ = new rviz_common::properties::VectorProperty(
     "Clip Min", Ogre::Vector3(-10.0f, -10.0f, -10.0f),
-    "Minimum corner of the clip AABB, in Reference Frame coordinates.",
+    "Minimum corner of the clip AABB.",
     clip_enabled_property_, SLOT(onClipChanged()), this);
 
   clip_max_property_ = new rviz_common::properties::VectorProperty(
     "Clip Max", Ogre::Vector3(10.0f, 10.0f, 10.0f),
-    "Maximum corner of the clip AABB, in Reference Frame coordinates.",
+    "Maximum corner of the clip AABB.",
     clip_enabled_property_, SLOT(onClipChanged()), this);
 
   // Advanced: transparency fallback.  Sorted is the exact, default path;
@@ -153,7 +143,6 @@ void GsplatDisplay::onInitialize()
   rebuildSorter();
 
   topic_property_->initialize(context_->getRosNodeAbstraction());
-  reference_frame_property_->setFrameManager(context_->getFrameManager());
 
   // Seed uniforms from the initial property values.  applyTransparencyMode
   // runs here too, but compositor attachment is deferred until the first
@@ -207,25 +196,6 @@ void GsplatDisplay::update(
     }
   }
 
-  // Pose the scene node at the Reference Frame's current pose in Fixed Frame.
-  if (scene_node_ && context_ && context_->getFrameManager()) {
-    const std::string frame = reference_frame_property_->getFrameStd();
-    Ogre::Vector3    position;
-    Ogre::Quaternion orientation;
-    if (context_->getFrameManager()->getTransform(frame, position, orientation)) {
-      scene_node_->setPosition(position);
-      scene_node_->setOrientation(orientation);
-      setStatus(
-        rviz_common::properties::StatusProperty::Ok,
-        "Reference Frame", "Transform OK");
-    } else {
-      setStatus(
-        rviz_common::properties::StatusProperty::Warn,
-        "Reference Frame",
-        QString("Frame '%1' not available in TF yet.")
-          .arg(QString::fromStdString(frame)));
-    }
-  }
 }
 
 void GsplatDisplay::reset()
