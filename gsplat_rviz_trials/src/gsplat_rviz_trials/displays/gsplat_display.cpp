@@ -54,20 +54,13 @@ GsplatDisplay::GsplatDisplay()
   // Default mode is PLY File — hide the topic field until the user flips it.
   topic_property_->hide();
 
-  sh_degree_property_ = new rviz_common::properties::IntProperty(
-    "SH Degree", 0,
-    "Spherical harmonics degree used for view-dependent colour (0 = DC only). "
-    "Lower values are faster; maximum is set by the loaded data.",
-    this, SLOT(onShDegreeChanged()), this);
-  sh_degree_property_->setMin(0);
-  sh_degree_property_->setMax(0);
-
   buildAdvancedGroup();
 }
 
 // Advanced group layout (collapsed by default):
 //
 //   Advanced
+//   ├── SH Degree
 //   ├── Alpha Threshold
 //   ├── Sort Backend
 //   ├── Clip Box  (BoolProperty, expands to show Min/Max)
@@ -88,10 +81,18 @@ void GsplatDisplay::buildAdvancedGroup()
 {
   auto * advanced_group = new rviz_common::properties::Property(
     "Advanced", QVariant(),
-    "Alpha threshold, sort backend, ROI clipping, and transparency fallback. "
-    "Defaults are sensible for most scenes.",
+    "SH degree, alpha threshold, sort backend, ROI clipping, and transparency "
+    "fallback. Defaults are sensible for most scenes.",
     this);
   advanced_group->collapse();
+
+  sh_degree_property_ = new rviz_common::properties::IntProperty(
+    "SH Degree", 0,
+    "Spherical harmonics degree used for view-dependent colour (0 = DC only). "
+    "Lower values are faster; maximum is set by the loaded data.",
+    advanced_group, SLOT(onShDegreeChanged()), this);
+  sh_degree_property_->setMin(0);
+  sh_degree_property_->setMax(0);
 
   alpha_threshold_property_ = new rviz_common::properties::FloatProperty(
     "Alpha Threshold", 0.05f,

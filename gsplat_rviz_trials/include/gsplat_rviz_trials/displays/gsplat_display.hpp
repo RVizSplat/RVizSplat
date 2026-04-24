@@ -65,19 +65,20 @@ private:
   // during its render pass once a viewport is known).
   void applyTransparencyMode();
 
-  // UI construction — builds the "Advanced" group (alpha threshold, sort
-  // backend, clip box, WBOIT sub-group) and parents it under this display.
-  // Members that live inside Advanced (alpha_threshold_, sorter_kind_,
-  // clip_*, transparency_mode_, wboit_*) are assigned by this helper.
+  // UI construction — builds the "Advanced" group (SH degree, alpha
+  // threshold, sort backend, clip box, WBOIT sub-group) and parents it
+  // under this display. Members that live inside Advanced (sh_degree_,
+  // alpha_threshold_, sorter_kind_, clip_*, transparency_mode_, wboit_*)
+  // are assigned by this helper.
   void buildAdvancedGroup();
 
   // Top-level (always visible).
   rviz_common::properties::EnumProperty *       source_mode_property_;
   rviz_common::properties::FilePickerProperty * splat_path_property_;
   rviz_common::properties::RosTopicProperty *   topic_property_;
-  rviz_common::properties::IntProperty *        sh_degree_property_;
 
   // Under "Advanced" group.
+  rviz_common::properties::IntProperty *        sh_degree_property_;
   rviz_common::properties::FloatProperty *      alpha_threshold_property_;
   rviz_common::properties::EnumProperty *       sorter_kind_property_;
 
