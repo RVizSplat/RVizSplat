@@ -619,6 +619,12 @@ void SplatCloud::notifyRenderSingleObject(
       params->setNamedConstant("u_clip_max",     cmax);
       params->setNamedConstant("u_splat_z_near", splat_z_near);
       params->setNamedConstant("u_splat_z_far",  splat_z_far);
+
+      // WBOIT-only sub-pixel cull threshold. A positive value engages
+      // the cull in splat.vert; 0 disables it. Sorted mode always
+      // pushes 0 so its shader behaviour is bit-identical to before.
+      const float cull_px = oit_enabled_ ? 0.5f : 0.0f;
+      params->setNamedConstant("u_min_px_extent", cull_px);
     }
   }
   if (pass->hasFragmentProgram()) {

@@ -16,6 +16,11 @@ vertex_program gsplat_rviz_trials/Splat.vert glsl
         // Splat-tight depth warp for WBOIT; far = -1 → fallback to gl_FragCoord.z.
         param_named      u_splat_z_near    float 0.0
         param_named      u_splat_z_far     float -1.0
+        // WBOIT-only sub-pixel cull. Default 0 keeps Sorted mode
+        // bit-identical; SplatCloud pushes a positive value in
+        // notifyRenderSingleObject when oit_enabled_ is true.
+        param_named_auto viewport_size     viewport_size
+        param_named      u_min_px_extent   float 0.0
     }
 }
 

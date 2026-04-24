@@ -35,6 +35,13 @@ uniform vec3          u_clip_max;
 uniform float         u_splat_z_near;
 uniform float         u_splat_z_far;
 
+// WBOIT-only sub-pixel cull threshold, in pixels. SplatCloud pushes
+// a positive value only when WBOIT is active; Sorted mode pushes 0
+// which disables the cull via the branch below, so the Sorted path
+// is bit-identical to pre-optimization behaviour.
+uniform vec4          viewport_size;     // Ogre auto-param: (w, h, 1/w, 1/h)
+uniform float         u_min_px_extent;
+
 out vec4  vColor;
 out vec2  vPosition;
 out float v_splat_z_warped;     // splat-center view-z warped into [0,1]
@@ -168,6 +175,23 @@ void main()
     vec2 diag = normalize(vec2(od, lambda1 - d1));
     vec2 v1   = sqrt(max(2. * lambda1, 0.0)) * diag;
     vec2 v2   = sqrt(max(2. * lambda2, 0.0)) * vec2(diag.y, -diag.x);
+
+    // WBOIT-only sub-pixel cull. When `u_min_px_extent > 0` — set only
+    // in WBOIT mode by SplatCloud — reject splats whose larger
+    // projected eigen-axis is smaller than the threshold. They
+    // rasterise to at most a sub-pixel fragment the FS discards anyway,
+    // so skipping them avoids both the accum and reveal raster passes.
+    //
+    // Sorted mode pushes 0 → the uniform-conditional branch is an
+    // unchanged no-op, so the Sorted path is bit-identical.
+    if (u_min_px_extent > 0.0) {
+        vec2 v1_px = vec2(v1.x * viewport_size.x, v1.y * viewport_size.y) * 0.5;
+        vec2 v2_px = vec2(v2.x * viewport_size.x, v2.y * viewport_size.y) * 0.5;
+        if (max(length(v1_px), length(v2_px)) < u_min_px_extent) {
+            gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
+            return;
+        }
+    }
 
     // ── Colour: uint8 DC base, plus optional SH1..3 contribution ─────────────
     vec3 rgb = rgba.rgb;
