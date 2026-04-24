@@ -19,6 +19,11 @@
 #include "gsplat_rviz_trials/splat_loaders/i_splat_source.hpp"
 #include "gsplat_rviz_trials/visibility_control.hpp"
 
+namespace Ogre
+{
+class Viewport;
+}
+
 namespace gsplat_rviz_trials
 {
 class SplatCloud;
@@ -60,10 +65,18 @@ private:
   void onLoadResult(LoadResult result, SourceKind kind, uint64_t gen);
   SourceMode currentMode() const;
 
-  // Push transparency_mode_property_ → SplatCloud::setOitEnabled. The
-  // cloud owns the compositor lifecycle (attach/detach happens lazily
-  // during its render pass once a viewport is known).
+  // Push transparency_mode_property_ → SplatCloud::setOitEnabled and
+  // attach/detach the WBOIT compositor on the current viewport. Called
+  // from property slots on the Qt main thread, which is safe (Ogre
+  // chain mutations here run between render frames, not during a chain
+  // walk).
   void applyTransparencyMode();
+
+  // Resolve the Ogre viewport RViz is rendering to, or nullptr if it
+  // isn't ready yet (can happen very early during onInitialize). The
+  // view controller is created by RViz before Displays, so this is
+  // non-null from any property-slot call.
+  Ogre::Viewport * resolveViewport() const;
 
   // UI construction — builds the "Advanced" group (SH degree, alpha
   // threshold, sort backend, clip box, WBOIT sub-group) and parents it
@@ -103,6 +116,13 @@ private:
   // the current one and drop if stale — prevents an in-flight callback from
   // clobbering state after the user switches topic/file.
   uint64_t                      source_gen_  = 0;
+
+  // WBOIT compositor attach state. compositor_viewport_ stays set once
+  // the compositor is attached to the viewport, even after a "disable"
+  // toggle — Ogre's chain entry is kept, only the enabled flag flips.
+  // Only cleared on destruction, where we fully detach.
+  Ogre::Viewport * compositor_viewport_{nullptr};
+  bool             wboit_compositor_active_{false};
 };
 
 }  // namespace displays

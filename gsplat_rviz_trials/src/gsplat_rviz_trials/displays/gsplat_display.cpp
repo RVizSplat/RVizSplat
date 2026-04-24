@@ -6,12 +6,16 @@
 #include <QFileDialog>
 #include <QMetaObject>
 
+#include <OgreCamera.h>
 #include <OgreSceneManager.h>
 #include <OgreSceneNode.h>
+#include <OgreViewport.h>
 
 #include "pluginlib/class_list_macros.hpp"
 #include "rviz_common/display_context.hpp"
 #include "rviz_common/properties/status_property.hpp"
+#include "rviz_common/view_controller.hpp"
+#include "rviz_common/view_manager.hpp"
 
 #include "gsplat_rviz_trials/sorters/i_splat_sorter.hpp"
 #include "gsplat_rviz_trials/sorters/sorter_factory.hpp"
@@ -19,6 +23,7 @@
 #include "gsplat_rviz_trials/splat_loaders/ros_topic_source.hpp"
 #include "gsplat_rviz_trials/splat_cloud.hpp"
 #include "gsplat_rviz_trials/splat_gpu.hpp"
+#include "gsplat_rviz_trials/transparency/wboit_compositor.hpp"
 
 namespace gsplat_rviz_trials
 {
@@ -168,10 +173,19 @@ void GsplatDisplay::buildAdvancedGroup()
 
 GsplatDisplay::~GsplatDisplay()
 {
+  // Detach the WBOIT compositor before the viewport goes away. Safe here
+  // because destruction runs outside the render loop; see the comment
+  // on transparency::wboit_compositor::detach() for why this can't run
+  // during SplatCloud::_updateRenderQueue.
+  if (compositor_viewport_) {
+    transparency::wboit_compositor::detach(compositor_viewport_);
+    compositor_viewport_ = nullptr;
+    wboit_compositor_active_ = false;
+  }
+
   // Drop the source before the cloud so any in-flight subscription callback
   // is torn down first. Bumping the generation ensures any already-queued
-  // main-thread delivery is dropped rather than run during teardown. The
-  // WBOIT compositor (if attached) is released by SplatCloud's destructor.
+  // main-thread delivery is dropped rather than run during teardown.
   ++source_gen_;
   source_.reset();
   source_kind_ = SourceKind::None;
@@ -214,9 +228,15 @@ void GsplatDisplay::onDisable()
     source_.reset();
     source_kind_ = SourceKind::None;
   }
-  // Tell the cloud to stop WBOIT so it detaches the compositor on its
-  // next render pass. The user's Transparency Mode property is untouched,
-  // so onEnable's applyTransparencyMode() restores the previous state.
+  // Disable the compositor so another display sharing this viewport
+  // doesn't inherit our WBOIT passes. The user's Transparency Mode
+  // property is untouched, so onEnable's applyTransparencyMode()
+  // re-enables it. Leave the chain entry attached (faster re-enable
+  // and avoids mid-render chain mutation).
+  if (wboit_compositor_active_) {
+    transparency::wboit_compositor::disable(compositor_viewport_);
+    wboit_compositor_active_ = false;
+  }
   if (splat_cloud_) splat_cloud_->setOitEnabled(false);
 }
 
@@ -368,12 +388,41 @@ void GsplatDisplay::applyTransparencyMode()
   const bool wboit = (transparency_mode_property_ &&
                       transparency_mode_property_->getOptionInt() == 1);
 
-  // SplatCloud owns the compositor lifecycle. The toggle is flagged here;
-  // the actual attach/detach happens on the next render pass inside
-  // SplatCloud::_updateRenderQueue (needs a live viewport, which is only
-  // available from the render thread).
+  // Update the cloud's queue-group gate (50 Sorted / 95 WBOIT).
   if (splat_cloud_) splat_cloud_->setOitEnabled(wboit);
+
+  // Toggle the compositor on the current viewport. Running this on the
+  // Qt main thread (we're inside a property slot) means Ogre is *not*
+  // mid-frame, so chain mutations are safe. The first attach also
+  // happens here once a viewport is available.
+  if (auto * vp = resolveViewport()) {
+    if (wboit) {
+      transparency::wboit_compositor::ensureDefined();
+      transparency::wboit_compositor::enable(vp);
+      compositor_viewport_ = vp;
+      wboit_compositor_active_ = true;
+    } else if (wboit_compositor_active_) {
+      transparency::wboit_compositor::disable(compositor_viewport_);
+      wboit_compositor_active_ = false;
+    }
+  }
+  // If vp == nullptr the viewport isn't wired up yet (called from very
+  // early onInitialize); the next applyTransparencyMode call (onEnable
+  // or a property slot) will find it and attach.
+
   if (context_) context_->queueRender();
+}
+
+Ogre::Viewport * GsplatDisplay::resolveViewport() const
+{
+  if (!context_) return nullptr;
+  auto * vm = context_->getViewManager();
+  if (!vm) return nullptr;
+  auto * vc = vm->getCurrent();
+  if (!vc) return nullptr;
+  auto * cam = vc->getCamera();
+  if (!cam) return nullptr;
+  return cam->getViewport();
 }
 
 void GsplatDisplay::rebuildSorter()

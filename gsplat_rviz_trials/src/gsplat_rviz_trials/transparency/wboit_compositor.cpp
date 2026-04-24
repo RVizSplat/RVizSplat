@@ -98,6 +98,9 @@ void enable(Ogre::Viewport * viewport)
   if (!viewport) return;
   auto & mgr = Ogre::CompositorManager::getSingleton();
   try {
+    // addCompositor is idempotent — returns the existing instance on
+    // repeat calls, so it's safe to run this every time WBOIT is
+    // requested.
     if (!mgr.addCompositor(viewport, kName)) return;
     mgr.setCompositorEnabled(viewport, kName, true);
   } catch (const Ogre::Exception &) {
@@ -107,6 +110,22 @@ void enable(Ogre::Viewport * viewport)
 
 void disable(Ogre::Viewport * viewport)
 {
+  // Toggle-only: keep the compositor in the viewport's chain but mark
+  // it disabled. Ogre skips disabled entries at no extra cost. Removing
+  // the compositor from the chain here would be unsafe: this function
+  // can be called mid-render (from SplatCloud::_updateRenderQueue) and
+  // Ogre's chain-walker does not tolerate chain mutations mid-walk —
+  // the symptom is a blank viewport on the very next frame.
+  if (!viewport) return;
+  auto & mgr = Ogre::CompositorManager::getSingleton();
+  try { mgr.setCompositorEnabled(viewport, kName, false); } catch (...) {}
+}
+
+void detach(Ogre::Viewport * viewport)
+{
+  // Disable then fully remove from the chain. Only safe from destruction
+  // paths (~SplatCloud) where no further rendering will happen on this
+  // viewport this frame.
   if (!viewport) return;
   auto & mgr = Ogre::CompositorManager::getSingleton();
   try { mgr.setCompositorEnabled(viewport, kName, false); } catch (...) {}

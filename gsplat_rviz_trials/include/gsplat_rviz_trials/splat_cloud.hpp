@@ -21,7 +21,6 @@ namespace Ogre
 class RenderQueue;
 class SceneManager;
 class SceneNode;
-class Viewport;
 }
 
 namespace gsplat_rviz_trials
@@ -153,19 +152,14 @@ private:
   Ogre::Vector3 clip_min_{-1e9f, -1e9f, -1e9f};
   Ogre::Vector3 clip_max_{ 1e9f,  1e9f,  1e9f};
 
-  // Transparency state.
+  // Transparency state. The compositor that implements WBOIT is owned by
+  // the Display (which can reach the viewport on the Qt main thread,
+  // between renders); this class only gates the per-frame queue group
+  // and uniform pushes on `oit_enabled_`.
   bool  oit_enabled_           = false;
   float wboit_weight_scale_    = 5.0f;
   float wboit_weight_exponent_ = 2.0f;
   float wboit_alpha_discard_   = 0.01f;
-
-  // WBOIT compositor lifecycle. The compositor is attached lazily on the
-  // first _updateRenderQueue that sees (oit_enabled_ == true) AND a live
-  // viewport. `compositor_viewport_` is kept so we detach from the same
-  // viewport we attached to, even if the viewport ptr returned by the
-  // scene manager later changes.
-  Ogre::Viewport * compositor_viewport_ = nullptr;
-  bool             wboit_compositor_active_ = false;
 };
 
 }  // namespace gsplat_rviz_trials

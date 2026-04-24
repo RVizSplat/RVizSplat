@@ -26,7 +26,6 @@
 
 #include "gsplat_rviz_trials/sorters/i_splat_sorter.hpp"
 #include "gsplat_rviz_trials/perf_monitor.hpp"
-#include "gsplat_rviz_trials/transparency/wboit_compositor.hpp"
 
 namespace gsplat_rviz_trials
 {
@@ -242,14 +241,6 @@ SplatCloud::SplatCloud(Ogre::SceneNode * parent_node)
 
 SplatCloud::~SplatCloud()
 {
-  // Detach the WBOIT compositor from whichever viewport we attached to.
-  // Done before the scene manager cleanup since compositor removal touches
-  // the viewport's compositor chain.
-  if (wboit_compositor_active_ && compositor_viewport_) {
-    transparency::wboit_compositor::disable(compositor_viewport_);
-    wboit_compositor_active_ = false;
-    compositor_viewport_ = nullptr;
-  }
   if (scene_manager_) {
     scene_manager_->removeRenderObjectListener(this);
   }
@@ -517,24 +508,12 @@ void SplatCloud::_updateRenderQueue(Ogre::RenderQueue * queue)
 
   auto * vp = scene_manager_->getCurrentViewport();
 
-  // WBOIT compositor lifecycle. The scene manager's current viewport is the
-  // only way to reach a live viewport from the render loop, so we drive the
-  // attach/detach from here. Attaches the first frame oit_enabled_ is true
-  // AND a viewport exists; detaches when oit_enabled_ goes false.
-  if (vp) {
-    if (oit_enabled_ && !wboit_compositor_active_) {
-      transparency::wboit_compositor::ensureDefined();
-      transparency::wboit_compositor::enable(vp);
-      compositor_viewport_ = vp;
-      wboit_compositor_active_ = true;
-    } else if (!oit_enabled_ && wboit_compositor_active_) {
-      transparency::wboit_compositor::disable(compositor_viewport_);
-      compositor_viewport_ = nullptr;
-      wboit_compositor_active_ = false;
-    }
-  }
-
-  // WBOIT is order-independent; skip the sort when it's active.
+  // WBOIT is order-independent; skip the sort when it's active. The
+  // compositor that implements WBOIT is owned by GsplatDisplay (it's
+  // attached/detached on the Qt main thread, between renders; doing
+  // that here would be mid-render-chain-walk and Ogre's chain walker
+  // does not tolerate chain mutations in that context — symptom is a
+  // blank viewport on the next frame).
   if (!oit_enabled_ && vp) {
     if (const Ogre::Camera * cam = vp->getCamera()) {
       scheduler_->requestSort(cam->getDerivedDirection());
