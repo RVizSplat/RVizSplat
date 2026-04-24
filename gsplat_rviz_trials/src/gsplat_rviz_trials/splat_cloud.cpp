@@ -18,6 +18,7 @@
 #include <OgreViewport.h>
 
 #include "gsplat_rviz_trials/sorters/i_splat_sorter.hpp"
+#include "gsplat_rviz_trials/perf_monitor.hpp"
 
 namespace gsplat_rviz_trials
 {
@@ -231,6 +232,13 @@ void SplatCloud::uploadTBO()
     glTexBuffer(GL_TEXTURE_BUFFER, GL_RGBA16F, sh_tbo_buf_);
     glBindTexture(GL_TEXTURE_BUFFER, 0);
   }
+
+  // 2 uvec4 texels × 4 bytes each = 32 B/splat for the base TBO.
+  const std::size_t tbo_b    = static_cast<std::size_t>(splat_count_) * 32;
+  // RGBA16F = 8 B per non-DC SH coefficient per splat.
+  const std::size_t sh_tbo_b = static_cast<std::size_t>(splat_count_) *
+                                static_cast<std::size_t>(sh_coeffs_per_splat_) * 8;
+  PerfMonitor::instance().setBufferStats(splat_count_, tbo_b, sh_tbo_b);
 }
 
 // ── Per-instance index VBO ────────────────────────────────────────────────────
@@ -322,6 +330,8 @@ void SplatCloud::_updateRenderQueue(Ogre::RenderQueue * queue)
 {
   if (splat_count_ == 0) return;
 
+  PerfMonitor::instance().recordFrame();
+
   if (sorter_) {
     auto * vp = scene_manager_->getCurrentViewport();
     if (const Ogre::Camera * cam = vp ? vp->getCamera() : nullptr) {
@@ -333,6 +343,7 @@ void SplatCloud::_updateRenderQueue(Ogre::RenderQueue * queue)
   }
 
   queue->addRenderable(this, 50u, mRenderQueuePriority);
+  PerfMonitor::instance().logAll();
 }
 
 void SplatCloud::visitRenderables(Ogre::Renderable::Visitor * visitor, bool /*debug*/)
@@ -380,6 +391,9 @@ void SplatCloud::notifyRenderSingleObject(
     upload_pending_ = false;
   }
 
+  // Time the steady-state per-frame work: shader param upload + TBO binding.
+  PerfMonitor::instance().startTimer("render");
+
   // Use the pass being rendered so this works for both depth-prepass and colour-blend passes.
   if (pass->hasVertexProgram()) {
     auto params = pass->getVertexProgramParameters();
@@ -405,6 +419,8 @@ void SplatCloud::notifyRenderSingleObject(
   glActiveTexture(GL_TEXTURE1);
   glBindTexture(GL_TEXTURE_BUFFER, sh_tbo_tex_);
   glActiveTexture(GL_TEXTURE0);
+
+  PerfMonitor::instance().stopTimer("render");
 }
 
 }  // namespace gsplat_rviz_trials

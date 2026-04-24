@@ -4,7 +4,7 @@
 
 #include <boost/sort/sort.hpp>
 
-#include "gsplat_rviz_trials/profiler.hpp"
+#include "gsplat_rviz_trials/perf_monitor.hpp"
 
 namespace gsplat_rviz_trials
 {
@@ -108,7 +108,7 @@ void CpuSorter::workerMain()
         depth_keys_.size() == count &&
         sort_indices_.size() == count)
     {
-      Profiler::instance().start("cpu_sort");
+      PerfMonitor::instance().startTimer("cpu_sort");
 
       for (uint32_t i = 0; i < count; ++i) {
         depth_keys_[i] = fwd.dotProduct(centers_[i]);
@@ -127,7 +127,7 @@ void CpuSorter::workerMain()
         back_buf_[i] = static_cast<float>(sort_indices_[i]);
       }
 
-      Profiler::instance().stop("cpu_sort");
+      PerfMonitor::instance().stopTimer("cpu_sort");
 
       {
         std::lock_guard<std::mutex> lock(mutex_);

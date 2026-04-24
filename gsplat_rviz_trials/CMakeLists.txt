@@ -57,7 +57,7 @@ endforeach()
 set(gsplat_rviz_trials_source_files
   src/gsplat_rviz_trials/displays/gsplat_display.cpp
   src/gsplat_rviz_trials/splat_cloud.cpp
-  src/gsplat_rviz_trials/profiler.cpp
+  src/gsplat_rviz_trials/perf_monitor.cpp
   src/gsplat_rviz_trials/sorters/cpu_sorter.cpp
   src/gsplat_rviz_trials/sorters/sorter_factory.cpp
   src/gsplat_rviz_trials/splat_loaders/ply_loader.cpp
