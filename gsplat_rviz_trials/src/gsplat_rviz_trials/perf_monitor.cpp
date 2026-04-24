@@ -111,6 +111,18 @@ void PerfMonitor::logAll()
       last_updated("cuda_sort") != std::chrono::steady_clock::time_point{};
     sort_cuda = cuda_newer;
     sort_ms   = cuda_newer ? last_ms("cuda_sort") : last_ms("cpu_sort");
+
+    // If the selected sort backend hasn't been measured within the current
+    // FPS sliding window, the sort isn't actually running this frame —
+    // WBOIT mode (order-independent) skips it. Report 0 so the log
+    // reflects current cost rather than a cached value from whenever sort
+    // was last active.
+    const auto sort_updated = cuda_newer
+      ? last_updated("cuda_sort") : last_updated("cpu_sort");
+    const auto window_start =
+      frame_times_.empty() ? now : frame_times_.front();
+    if (sort_updated < window_start) sort_ms = 0.0;
+
     render_ms = last_ms("render");
 
     splat_count  = splat_count_;

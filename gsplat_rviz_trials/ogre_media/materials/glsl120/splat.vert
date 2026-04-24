@@ -24,8 +24,20 @@ uniform mat4          projectionMatrix;
 uniform vec3          cam_view_dir;
 uniform int           sh_degree;
 
-out vec4 vColor;
-out vec2 vPosition;
+// ROI clip box (axis-aligned, in the scene_node_'s local frame which is the
+// Reference Frame's coordinates on the host side).
+uniform int           u_clip_enabled;
+uniform vec3          u_clip_min;
+uniform vec3          u_clip_max;
+
+// Splat-tight forward-z warp bounds used by the WBOIT weight function.
+// Far = -1 signals "unset" → fragment shaders fall back to gl_FragCoord.z.
+uniform float         u_splat_z_near;
+uniform float         u_splat_z_far;
+
+out vec4  vColor;
+out vec2  vPosition;
+out float v_splat_z_warped;     // splat-center view-z warped into [0,1]
 
 // ── SH constants (Y_l^m coefficients) ──────────────────────────────────────
 const float SH_C1    =  0.4886025119029199;
@@ -91,6 +103,16 @@ void main()
 
     vec3 center = uintBitsToFloat(t0.xyz);
 
+    // ROI clip: reject splats whose centre is outside [Clip Min, Clip Max].
+    // z = 2 places the quad past the far plane → rasteriser discards.
+    if (u_clip_enabled != 0) {
+        if (any(lessThan(center, u_clip_min)) ||
+            any(greaterThan(center, u_clip_max))) {
+            gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
+            return;
+        }
+    }
+
     vec2 c0001 = unpackHalf2x16(t0.w);
     vec2 c0211 = unpackHalf2x16(t1.x);
     vec2 c1222 = unpackHalf2x16(t1.y);
@@ -154,6 +176,15 @@ void main()
     }
     vColor    = vec4(rgb, rgba.a);
     vPosition = vertex;
+
+    // Splat-tight warped depth in [0,1]; sentinel -1 if bounds unset.  Ogre
+    // view space looks down -Z, so forward distance is -camspace.z.  All four
+    // quad vertices share this value, so it interpolates to a constant per
+    // splat — exactly the per-splat depth WBOIT's weight function wants.
+    float z_span = u_splat_z_far - u_splat_z_near;
+    v_splat_z_warped = (z_span > 1e-3)
+        ? clamp((-camspace.z - u_splat_z_near) / z_span, 0.0, 1.0)
+        : -1.0;
 
     gl_Position = vec4(
         vCenter.xy + vertex.x * v1 + vertex.y * v2,

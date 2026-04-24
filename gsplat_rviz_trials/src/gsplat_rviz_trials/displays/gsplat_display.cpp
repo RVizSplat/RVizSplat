@@ -6,12 +6,16 @@
 #include <QFileDialog>
 #include <QMetaObject>
 
+#include <OgreCamera.h>
 #include <OgreSceneManager.h>
 #include <OgreSceneNode.h>
+#include <OgreViewport.h>
 
 #include "pluginlib/class_list_macros.hpp"
 #include "rviz_common/display_context.hpp"
 #include "rviz_common/properties/status_property.hpp"
+#include "rviz_common/view_controller.hpp"
+#include "rviz_common/view_manager.hpp"
 
 #include "gsplat_rviz_trials/sorters/i_splat_sorter.hpp"
 #include "gsplat_rviz_trials/sorters/sorter_factory.hpp"
@@ -19,6 +23,7 @@
 #include "gsplat_rviz_trials/splat_loaders/ros_topic_source.hpp"
 #include "gsplat_rviz_trials/splat_cloud.hpp"
 #include "gsplat_rviz_trials/splat_gpu.hpp"
+#include "gsplat_rviz_trials/transparency/wboit_compositor.hpp"
 
 namespace gsplat_rviz_trials
 {
@@ -27,6 +32,9 @@ namespace displays
 
 GsplatDisplay::GsplatDisplay()
 {
+  // Top-level properties — data source, mode selector, SH degree. Always
+  // visible; the two load paths (file and topic) are mutually exclusive at
+  // runtime but both shown so users can switch without re-opening a sub-group.
   source_mode_property_ = new rviz_common::properties::EnumProperty(
     "Source", "PLY File",
     "Where splats come from. Exactly one of the two source fields below is "
@@ -51,31 +59,130 @@ GsplatDisplay::GsplatDisplay()
   // Default mode is PLY File — hide the topic field until the user flips it.
   topic_property_->hide();
 
+  buildAdvancedGroup();
+}
+
+// Advanced group layout (collapsed by default):
+//
+//   Advanced
+//   ├── SH Degree
+//   ├── Alpha Threshold
+//   ├── Sort Backend
+//   ├── Clip Box  (BoolProperty, expands to show Min/Max)
+//   │   ├── Clip Min
+//   │   └── Clip Max
+//   └── WBOIT  (sub-group, collapsed)
+//       ├── Transparency Mode
+//       ├── WBOIT Weight Scale
+//       ├── WBOIT Weight Exponent
+//       └── WBOIT Alpha Discard
+//
+// Grouping rationale: these are all tuning knobs that a user may want to
+// reach occasionally but don't belong in the top-level clutter. WBOIT is
+// nested one level deeper because it's a niche transparency mode — the
+// default Sorted path needs no tuning, so the WBOIT knobs stay out of view
+// unless the user explicitly opens the sub-group.
+void GsplatDisplay::buildAdvancedGroup()
+{
+  auto * advanced_group = new rviz_common::properties::Property(
+    "Advanced", QVariant(),
+    "SH degree, alpha threshold, sort backend, ROI clipping, and transparency "
+    "fallback. Defaults are sensible for most scenes.",
+    this);
+  advanced_group->collapse();
+
   sh_degree_property_ = new rviz_common::properties::IntProperty(
     "SH Degree", 0,
     "Spherical harmonics degree used for view-dependent colour (0 = DC only). "
     "Lower values are faster; maximum is set by the loaded data.",
-    this, SLOT(onShDegreeChanged()), this);
+    advanced_group, SLOT(onShDegreeChanged()), this);
   sh_degree_property_->setMin(0);
   sh_degree_property_->setMax(0);
 
   alpha_threshold_property_ = new rviz_common::properties::FloatProperty(
     "Alpha Threshold", 0.05f,
     "Splat fragments with opacity below this value are discarded.",
-    this, SLOT(onAlphaThresholdChanged()), this);
+    advanced_group, SLOT(onAlphaThresholdChanged()), this);
   alpha_threshold_property_->setMin(0.0f);
   alpha_threshold_property_->setMax(1.0f);
 
   sorter_kind_property_ = new rviz_common::properties::EnumProperty(
     "Sort Backend", "CUDA",
     "Depth-sort backend. CUDA falls back to CPU if no device is available.",
-    this, SLOT(onSorterKindChanged()), this);
+    advanced_group, SLOT(onSorterKindChanged()), this);
   sorter_kind_property_->addOption("CPU",  static_cast<int>(SorterKind::Cpu));
   sorter_kind_property_->addOption("CUDA", static_cast<int>(SorterKind::Cuda));
+
+  // ROI clip — axis-aligned box in the scene's local frame. Useful for
+  // trimming floaters, hiding ceilings on handheld captures, or isolating
+  // a workspace region. The BoolProperty acts as its own parent: toggling
+  // it reveals/hides the Min/Max children.
+  clip_enabled_property_ = new rviz_common::properties::BoolProperty(
+    "Clip Box", false,
+    "Cull splats whose centre falls outside [Clip Min, Clip Max].",
+    advanced_group, SLOT(onClipChanged()), this);
+
+  clip_min_property_ = new rviz_common::properties::VectorProperty(
+    "Clip Min", Ogre::Vector3(-10.0f, -10.0f, -10.0f),
+    "Minimum corner of the clip AABB.",
+    clip_enabled_property_, SLOT(onClipChanged()), this);
+
+  clip_max_property_ = new rviz_common::properties::VectorProperty(
+    "Clip Max", Ogre::Vector3(10.0f, 10.0f, 10.0f),
+    "Maximum corner of the clip AABB.",
+    clip_enabled_property_, SLOT(onClipChanged()), this);
+
+  // WBOIT sub-group. Collapsed so the WBOIT-specific knobs only show when
+  // the user opens them; Transparency Mode also lives here because
+  // enabling WBOIT is the entry point to the rest of the sub-group.
+  auto * wboit_group = new rviz_common::properties::Property(
+    "WBOIT", QVariant(),
+    "Order-independent transparency. Approximation; use when the sort is "
+    "a bottleneck (very large clouds, fast camera motion, streaming splats).",
+    advanced_group);
+  wboit_group->collapse();
+
+  transparency_mode_property_ = new rviz_common::properties::EnumProperty(
+    "Transparency Mode", "Sorted",
+    "Sorted = exact back-to-front. WBOIT = order-independent approximation.",
+    wboit_group, SLOT(onTransparencyModeChanged()), this);
+  transparency_mode_property_->addOption("Sorted", 0);
+  transparency_mode_property_->addOption("WBOIT",  1);
+
+  wboit_weight_scale_property_ = new rviz_common::properties::FloatProperty(
+    "WBOIT Weight Scale", 5.0f,
+    "Depth-discrimination strength in the WBOIT weight function.",
+    wboit_group, SLOT(onWboitTuningChanged()), this);
+  wboit_weight_scale_property_->setMin(0.1f);
+  wboit_weight_scale_property_->setMax(50.0f);
+
+  wboit_weight_exponent_property_ = new rviz_common::properties::FloatProperty(
+    "WBOIT Weight Exponent", 2.0f,
+    "Alpha-suppression power in the WBOIT weight function.",
+    wboit_group, SLOT(onWboitTuningChanged()), this);
+  wboit_weight_exponent_property_->setMin(0.5f);
+  wboit_weight_exponent_property_->setMax(6.0f);
+
+  wboit_alpha_discard_property_ = new rviz_common::properties::FloatProperty(
+    "WBOIT Alpha Discard", 0.01f,
+    "Fragment alpha cutoff in the WBOIT accumulation pass.",
+    wboit_group, SLOT(onWboitTuningChanged()), this);
+  wboit_alpha_discard_property_->setMin(0.0f);
+  wboit_alpha_discard_property_->setMax(0.1f);
 }
 
 GsplatDisplay::~GsplatDisplay()
 {
+  // Detach the WBOIT compositor before the viewport goes away. Safe here
+  // because destruction runs outside the render loop; see the comment
+  // on transparency::wboit_compositor::detach() for why this can't run
+  // during SplatCloud::_updateRenderQueue.
+  if (compositor_viewport_) {
+    transparency::wboit_compositor::detach(compositor_viewport_);
+    compositor_viewport_ = nullptr;
+    wboit_compositor_active_ = false;
+  }
+
   // Drop the source before the cloud so any in-flight subscription callback
   // is torn down first. Bumping the generation ensures any already-queued
   // main-thread delivery is dropped rather than run during teardown.
@@ -92,6 +199,13 @@ void GsplatDisplay::onInitialize()
   rebuildSorter();
 
   topic_property_->initialize(context_->getRosNodeAbstraction());
+
+  // Seed uniforms from the initial property values.  applyTransparencyMode
+  // runs here too, but compositor attachment is deferred until the first
+  // update() because the viewport isn't wired up yet.
+  onClipChanged();
+  onWboitTuningChanged();
+  applyTransparencyMode();
 }
 
 void GsplatDisplay::onEnable()
@@ -101,6 +215,9 @@ void GsplatDisplay::onEnable()
   if (currentMode() == SourceMode::Topic) {
     onTopicChanged();
   }
+  // Re-apply transparency mode; if WBOIT was active before disable, the
+  // cloud's compositor attach is deferred to its next render pass.
+  applyTransparencyMode();
 }
 
 void GsplatDisplay::onDisable()
@@ -111,6 +228,16 @@ void GsplatDisplay::onDisable()
     source_.reset();
     source_kind_ = SourceKind::None;
   }
+  // Disable the compositor so another display sharing this viewport
+  // doesn't inherit our WBOIT passes. The user's Transparency Mode
+  // property is untouched, so onEnable's applyTransparencyMode()
+  // re-enables it. Leave the chain entry attached (faster re-enable
+  // and avoids mid-render chain mutation).
+  if (wboit_compositor_active_) {
+    transparency::wboit_compositor::disable(compositor_viewport_);
+    wboit_compositor_active_ = false;
+  }
+  if (splat_cloud_) splat_cloud_->setOitEnabled(false);
 }
 
 void GsplatDisplay::reset()
@@ -230,6 +357,72 @@ void GsplatDisplay::onSourceModeChanged()
   } else {
     onTopicChanged();
   }
+}
+
+void GsplatDisplay::onClipChanged()
+{
+  if (!splat_cloud_) return;
+  splat_cloud_->setClipEnabled(clip_enabled_property_->getBool());
+  splat_cloud_->setClipBox(
+    clip_min_property_->getVector(),
+    clip_max_property_->getVector());
+  if (context_) context_->queueRender();
+}
+
+void GsplatDisplay::onTransparencyModeChanged()
+{
+  applyTransparencyMode();
+}
+
+void GsplatDisplay::onWboitTuningChanged()
+{
+  if (!splat_cloud_) return;
+  splat_cloud_->setWboitWeightScale(wboit_weight_scale_property_->getFloat());
+  splat_cloud_->setWboitWeightExponent(wboit_weight_exponent_property_->getFloat());
+  splat_cloud_->setWboitAlphaDiscard(wboit_alpha_discard_property_->getFloat());
+  if (context_) context_->queueRender();
+}
+
+void GsplatDisplay::applyTransparencyMode()
+{
+  const bool wboit = (transparency_mode_property_ &&
+                      transparency_mode_property_->getOptionInt() == 1);
+
+  // Update the cloud's queue-group gate (50 Sorted / 95 WBOIT).
+  if (splat_cloud_) splat_cloud_->setOitEnabled(wboit);
+
+  // Toggle the compositor on the current viewport. Running this on the
+  // Qt main thread (we're inside a property slot) means Ogre is *not*
+  // mid-frame, so chain mutations are safe. The first attach also
+  // happens here once a viewport is available.
+  if (auto * vp = resolveViewport()) {
+    if (wboit) {
+      transparency::wboit_compositor::ensureDefined();
+      transparency::wboit_compositor::enable(vp);
+      compositor_viewport_ = vp;
+      wboit_compositor_active_ = true;
+    } else if (wboit_compositor_active_) {
+      transparency::wboit_compositor::disable(compositor_viewport_);
+      wboit_compositor_active_ = false;
+    }
+  }
+  // If vp == nullptr the viewport isn't wired up yet (called from very
+  // early onInitialize); the next applyTransparencyMode call (onEnable
+  // or a property slot) will find it and attach.
+
+  if (context_) context_->queueRender();
+}
+
+Ogre::Viewport * GsplatDisplay::resolveViewport() const
+{
+  if (!context_) return nullptr;
+  auto * vm = context_->getViewManager();
+  if (!vm) return nullptr;
+  auto * vc = vm->getCurrent();
+  if (!vc) return nullptr;
+  auto * cam = vc->getCamera();
+  if (!cam) return nullptr;
+  return cam->getViewport();
 }
 
 void GsplatDisplay::rebuildSorter()

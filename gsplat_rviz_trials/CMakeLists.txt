@@ -63,6 +63,7 @@ set(gsplat_rviz_trials_source_files
   src/gsplat_rviz_trials/splat_loaders/ply_loader.cpp
   src/gsplat_rviz_trials/splat_loaders/ply_file_source.cpp
   src/gsplat_rviz_trials/splat_loaders/ros_topic_source.cpp
+  src/gsplat_rviz_trials/transparency/wboit_compositor.cpp
 )
 
 if(CUDAToolkit_FOUND)

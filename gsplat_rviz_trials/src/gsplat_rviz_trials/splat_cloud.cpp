@@ -6,12 +6,14 @@
 #include <algorithm>
 #include <condition_variable>
 #include <cstring>
+#include <limits>
 #include <mutex>
 #include <numeric>
 #include <optional>
 #include <string>
 #include <thread>
 
+#include <OgreAutoParamDataSource.h>
 #include <OgreCamera.h>
 #include <OgreHardwareBufferManager.h>
 #include <OgreMaterialManager.h>
@@ -504,7 +506,15 @@ void SplatCloud::_updateRenderQueue(Ogre::RenderQueue * queue)
 
   PerfMonitor::instance().recordFrame();
 
-  if (auto * vp = scene_manager_->getCurrentViewport()) {
+  auto * vp = scene_manager_->getCurrentViewport();
+
+  // WBOIT is order-independent; skip the sort when it's active. The
+  // compositor that implements WBOIT is owned by GsplatDisplay (it's
+  // attached/detached on the Qt main thread, between renders; doing
+  // that here would be mid-render-chain-walk and Ogre's chain walker
+  // does not tolerate chain mutations in that context — symptom is a
+  // blank viewport on the next frame).
+  if (!oit_enabled_ && vp) {
     if (const Ogre::Camera * cam = vp->getCamera()) {
       scheduler_->requestSort(cam->getDerivedDirection());
       if (auto result = scheduler_->takeResult()) {
@@ -513,7 +523,12 @@ void SplatCloud::_updateRenderQueue(Ogre::RenderQueue * queue)
     }
   }
 
-  queue->addRenderable(this, 50u, mRenderQueuePriority);
+  // Move the splat out of the opaque range when WBOIT is active so its
+  // pass-1 opaque scene (lastRenderQueue=94) skips the splats and passes
+  // 2-3 (first/last=95) pick them up with the right scheme.
+  const uint8_t queue_group = oit_enabled_ ? 95u : 50u;
+  queue->addRenderable(this, queue_group, mRenderQueuePriority);
+
   PerfMonitor::instance().logAll();
 }
 
@@ -551,7 +566,7 @@ const Ogre::LightList & SplatCloud::getLights() const { return queryLights(); }
 void SplatCloud::notifyRenderSingleObject(
   Ogre::Renderable * rend,
   const Ogre::Pass * pass,
-  const Ogre::AutoParamDataSource *,
+  const Ogre::AutoParamDataSource * source,
   const Ogre::LightList *,
   bool)
 {
@@ -565,11 +580,54 @@ void SplatCloud::notifyRenderSingleObject(
   // Time the steady-state per-frame work: shader param upload + TBO binding.
   PerfMonitor::instance().startTimer("render");
 
-  // Use the pass being rendered so this works for both depth-prepass and colour-blend passes.
+  // Splat-tight forward-z range in view space — WBOIT's weight function needs
+  // a meaningful [0,1] depth range instead of the ~[0.98, 0.9998] cluster you
+  // get from raw gl_FragCoord.z. Sentinel (far = -1) → shader falls back to
+  // gl_FragCoord.z. Computed only in WBOIT mode since Sorted ignores it.
+  float splat_z_near = 0.0f;
+  float splat_z_far  = -1.0f;
+  if (oit_enabled_ && source && !bounds_.isNull()) {
+    const Ogre::Matrix4 & view = source->getViewMatrix();
+    const auto corners = bounds_.getAllCorners();
+    float z_min =  std::numeric_limits<float>::max();
+    float z_max = -std::numeric_limits<float>::max();
+    for (int i = 0; i < 8; ++i) {
+      const Ogre::Vector3 vc = view * corners[i];
+      const float fwd = -vc.z;   // Ogre view space: -Z forward
+      if (fwd < z_min) z_min = fwd;
+      if (fwd > z_max) z_max = fwd;
+    }
+    if (z_max > z_min + 1e-3f) {
+      const float span = z_max - z_min;
+      splat_z_near = std::max(0.0f, z_min - 0.05f * span);
+      splat_z_far  = z_max + 0.05f * span;
+    }
+  }
+
+  // Use the pass being rendered so this works for both the default (sorted)
+  // pass and the WBOIT accum/reveal passes. setIgnoreMissingParams lets us
+  // fire the whole bundle regardless of which shader declares what.
   if (pass->hasVertexProgram()) {
     auto params = pass->getVertexProgramParameters();
     if (params) {
-      params->setNamedConstant("sh_degree", active_sh_degree_);
+      params->setIgnoreMissingParams(true);
+      params->setNamedConstant("sh_degree",      active_sh_degree_);
+      params->setNamedConstant("u_clip_enabled", clip_enabled_ ? 1 : 0);
+      const Ogre::Vector4 cmin(clip_min_.x, clip_min_.y, clip_min_.z, 0.0f);
+      const Ogre::Vector4 cmax(clip_max_.x, clip_max_.y, clip_max_.z, 0.0f);
+      params->setNamedConstant("u_clip_min",     cmin);
+      params->setNamedConstant("u_clip_max",     cmax);
+      params->setNamedConstant("u_splat_z_near", splat_z_near);
+      params->setNamedConstant("u_splat_z_far",  splat_z_far);
+    }
+  }
+  if (pass->hasFragmentProgram()) {
+    auto fp = pass->getFragmentProgramParameters();
+    if (fp) {
+      fp->setIgnoreMissingParams(true);
+      fp->setNamedConstant("wboit_weight_scale",    wboit_weight_scale_);
+      fp->setNamedConstant("wboit_weight_exponent", wboit_weight_exponent_);
+      fp->setNamedConstant("wboit_alpha_discard",   wboit_alpha_discard_);
     }
   }
 

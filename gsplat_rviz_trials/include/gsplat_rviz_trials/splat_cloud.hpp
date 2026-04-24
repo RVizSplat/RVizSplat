@@ -69,6 +69,27 @@ public:
   // Write sorted indices into the per-instance VBO.
   void applySort(const float * indices, uint32_t count);
 
+  // Axis-aligned clip box in the scene_node_'s local frame.  Splats whose
+  // centre falls outside [min, max] are culled at the vertex stage.
+  void setClipEnabled(bool v) { clip_enabled_ = v; }
+  void setClipBox(const Ogre::Vector3 & mn, const Ogre::Vector3 & mx)
+  {
+    clip_min_ = mn;
+    clip_max_ = mx;
+  }
+
+  // Switch between Sorted (false, default) and WBOIT (true) transparency.
+  // Setting this true triggers a deferred WBOIT-compositor attach on the
+  // next render pass (once a viewport is known); setting it false detaches.
+  // The per-frame depth sort is skipped while WBOIT is active since WBOIT
+  // is order-independent.
+  void setOitEnabled(bool v) { oit_enabled_ = v; }
+
+  // WBOIT weight-function knobs, pushed as fragment uniforms each frame.
+  void setWboitWeightScale(float v)    { wboit_weight_scale_    = v; }
+  void setWboitWeightExponent(float v) { wboit_weight_exponent_ = v; }
+  void setWboitAlphaDiscard(float v)   { wboit_alpha_discard_   = v; }
+
   // ── Ogre::MovableObject ────────────────────────────────────────────
   const Ogre::String & getMovableType() const override;
   const Ogre::AxisAlignedBox & getBoundingBox() const override { return bounds_; }
@@ -125,6 +146,20 @@ private:
 
   class SortScheduler;
   std::unique_ptr<SortScheduler> scheduler_;
+
+  // ROI clip state (pushed as uniforms each frame).
+  bool          clip_enabled_ = false;
+  Ogre::Vector3 clip_min_{-1e9f, -1e9f, -1e9f};
+  Ogre::Vector3 clip_max_{ 1e9f,  1e9f,  1e9f};
+
+  // Transparency state. The compositor that implements WBOIT is owned by
+  // the Display (which can reach the viewport on the Qt main thread,
+  // between renders); this class only gates the per-frame queue group
+  // and uniform pushes on `oit_enabled_`.
+  bool  oit_enabled_           = false;
+  float wboit_weight_scale_    = 5.0f;
+  float wboit_weight_exponent_ = 2.0f;
+  float wboit_alpha_discard_   = 0.01f;
 };
 
 }  // namespace gsplat_rviz_trials
