@@ -1,0 +1,14 @@
+<library path="gsplat_rviz_plugin">
+
+  <!-- Display plugins -->
+  <class
+    name="gsplat_rviz_plugin/GsplatDisplay"
+    type="gsplat_rviz_plugin::displays::GsplatDisplay"
+    base_class_type="rviz_common::Display"
+  >
+    <description>
+      Displays a Gaussian Splatting scene.
+    </description>
+  </class>
+
+</library>
