@@ -9,7 +9,7 @@
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
-  <depend>gsplat_rviz_trials</depend>
+  <depend>gsplat_rviz_plugin</depend>
 
   <export>
     <metapackage/>
