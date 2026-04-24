@@ -1,0 +1,40 @@
+name: ROS CI
+
+on:
+  push:
+    branches:
+      - main
+      - "**"
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: ros:rolling
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: ros_ws/src/RVizSplat
+
+      - name: Install system dependencies
+        run: |
+          apt-get update
+          rosdep update
+          rosdep install \
+            --from-paths ros_ws/src \
+            --ignore-src \
+            --rosdistro rolling \
+            --skip-keys ament_python \
+            -y
+        env:
+          DEBIAN_FRONTEND: noninteractive
+
+      - name: Build
+        run: |
+          . /opt/ros/rolling/setup.sh
+          cd ros_ws
+          colcon build --symlink-install --event-handlers console_cohesion+
