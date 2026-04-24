@@ -10,9 +10,8 @@ namespace gsplat_rviz_trials
 
 enum class SorterKind
 {
-  Auto = 0,   // CUDA if available at runtime, else CPU
-  Cpu  = 1,
-  Cuda = 2,
+  Cpu  = 0,
+  Cuda = 1,   // falls back to CPU if no device / no CUDA build
 };
 
 // Create a sorter of the requested kind. Falls back to CPU if CUDA was

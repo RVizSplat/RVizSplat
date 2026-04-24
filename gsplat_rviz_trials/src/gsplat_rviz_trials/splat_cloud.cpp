@@ -4,8 +4,13 @@
 #include <GL/glew.h>
 
 #include <algorithm>
+#include <condition_variable>
 #include <cstring>
+#include <mutex>
 #include <numeric>
+#include <optional>
+#include <string>
+#include <thread>
 
 #include <OgreCamera.h>
 #include <OgreHardwareBufferManager.h>
@@ -24,6 +29,151 @@ namespace gsplat_rviz_trials
 {
 
 static const Ogre::String MOT_SPLAT_CLOUD = "SplatCloud";
+
+// ── SortScheduler ─────────────────────────────────────────────────────────────
+//
+// Owns a worker thread and drives an ISplatSorter from it. All sorter methods
+// (including construction's companion uploadCenters, actual sort, and the
+// sorter's destructor) run on this thread — which keeps CUDA context usage
+// confined to a single thread and isolates the render thread from sort cost.
+//
+// Render thread posts commands (setSorter, setCenters, requestSort) and
+// picks up completed sorts with takeResult(). Sort requests are latest-wins;
+// unconsumed results are dropped when centres change.
+class SplatCloud::SortScheduler
+{
+public:
+  SortScheduler()
+  {
+    worker_ = std::thread(&SortScheduler::workerMain, this);
+  }
+
+  ~SortScheduler()
+  {
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      shutdown_ = true;
+    }
+    cv_.notify_all();
+    if (worker_.joinable()) worker_.join();
+  }
+
+  void setSorter(std::unique_ptr<ISplatSorter> sorter)
+  {
+    std::string n = sorter ? sorter->name() : "";
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      pending_new_sorter_     = std::move(sorter);
+      has_pending_new_sorter_ = true;
+      sort_pending_           = false;   // stale wrt new sorter's data
+      latest_result_.reset();
+      name_                   = std::move(n);
+    }
+    cv_.notify_all();
+  }
+
+  void setCenters(std::vector<Ogre::Vector3> centers)
+  {
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      pending_centers_ = std::move(centers);
+      sort_pending_    = false;          // stale wrt new centres
+      latest_result_.reset();
+    }
+    cv_.notify_all();
+  }
+
+  void requestSort(const Ogre::Vector3 & cam_fwd)
+  {
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      sort_fwd_     = cam_fwd;
+      sort_pending_ = true;
+    }
+    cv_.notify_all();
+  }
+
+  std::unique_ptr<SortResult> takeResult()
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return std::move(latest_result_);
+  }
+
+  std::string name() const
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return name_;
+  }
+
+private:
+  void workerMain()
+  {
+    // Sorter lives on this stack frame so it's destroyed on the worker thread.
+    std::unique_ptr<ISplatSorter> sorter;
+
+    while (true) {
+      std::unique_ptr<ISplatSorter> new_sorter;
+      std::optional<std::vector<Ogre::Vector3>> centers;
+      bool do_sort = false;
+      Ogre::Vector3 fwd;
+
+      {
+        std::unique_lock<std::mutex> lock(mutex_);
+        cv_.wait(lock, [this] {
+          return shutdown_ || has_pending_new_sorter_ ||
+                 pending_centers_.has_value() || sort_pending_;
+        });
+
+        if (shutdown_) break;
+
+        if (has_pending_new_sorter_) {
+          new_sorter              = std::move(pending_new_sorter_);
+          has_pending_new_sorter_ = false;
+        } else if (pending_centers_.has_value()) {
+          centers = std::move(pending_centers_);
+          pending_centers_.reset();
+        } else if (sort_pending_) {
+          fwd           = sort_fwd_;
+          sort_pending_ = false;
+          do_sort       = true;
+        }
+      }
+
+      if (new_sorter) {
+        // Old sorter (if any) is destroyed here, on this thread.
+        sorter = std::move(new_sorter);
+      }
+      if (centers) {
+        if (sorter) sorter->uploadCenters(*centers);
+      }
+      if (do_sort && sorter) {
+        SortResult r = sorter->sort(fwd);
+        if (r.count != 0) {
+          auto out = std::make_unique<SortResult>(std::move(r));
+          std::lock_guard<std::mutex> lock(mutex_);
+          latest_result_ = std::move(out);
+        }
+      }
+    }
+
+    // Destroy sorter on this thread before exiting.
+    sorter.reset();
+  }
+
+  mutable std::mutex      mutex_;
+  std::condition_variable cv_;
+  std::thread             worker_;
+  bool                    shutdown_ = false;
+
+  std::unique_ptr<ISplatSorter>             pending_new_sorter_;
+  bool                                      has_pending_new_sorter_ = false;
+  std::optional<std::vector<Ogre::Vector3>> pending_centers_;
+  bool                                      sort_pending_ = false;
+  Ogre::Vector3                             sort_fwd_;
+
+  std::unique_ptr<SortResult>               latest_result_;
+  std::string                               name_;
+};
 
 // IEEE 754 float32 → binary16. Round-to-nearest-even, saturates to inf on overflow.
 static inline uint16_t floatToHalf(float f)
@@ -73,6 +223,7 @@ static inline uint32_t packDCColor(const float sh0[3], float alpha)
 }
 
 SplatCloud::SplatCloud(Ogre::SceneNode * parent_node)
+  : scheduler_(std::make_unique<SortScheduler>())
 {
   scene_manager_ = parent_node->getCreator();
 
@@ -98,6 +249,17 @@ SplatCloud::~SplatCloud()
 
   delete render_op_.vertexData;
   delete render_op_.indexData;
+
+  // scheduler_'s dtor joins its worker, which destroys the sorter on that
+  // thread (important for CUDA-context safety).
+}
+
+void SplatCloud::setSorter(std::unique_ptr<ISplatSorter> sorter)
+{
+  scheduler_->setSorter(std::move(sorter));
+  if (!centers_cache_.empty()) {
+    scheduler_->setCenters(centers_cache_);
+  }
 }
 
 // ── Geometry ──────────────────────────────────────────────────────────────────
@@ -273,13 +435,18 @@ void SplatCloud::setSplats(std::vector<SplatGPU> splats, int sh_degree)
   pending_splats_   = std::move(splats);
   upload_pending_   = true;
 
-  // Rebuild bounds from splat centres
+  // Rebuild bounds + centres cache from splat data.
   bounds_.setNull();
-  for (const auto & s : pending_splats_) {
-    bounds_.merge(Ogre::Vector3(s.center[0], s.center[1], s.center[2]));
+  centers_cache_.resize(pending_splats_.size());
+  for (size_t i = 0; i < pending_splats_.size(); ++i) {
+    const auto & s = pending_splats_[i];
+    const Ogre::Vector3 c(s.center[0], s.center[1], s.center[2]);
+    centers_cache_[i] = c;
+    bounds_.merge(c);
   }
 
   buildIndexVBO();
+  scheduler_->setCenters(centers_cache_);
 
   if (auto * node = getParentSceneNode()) {
     node->needUpdate();
@@ -293,10 +460,13 @@ void SplatCloud::clear()
   active_sh_degree_ = 0;
   texels_per_splat_ = 0;
   pending_splats_.clear();
+  centers_cache_.clear();
   upload_pending_ = false;
   destroyTBO();
   index_vbo_.reset();
   bounds_.setNull();
+
+  scheduler_->setCenters({});
 
   if (auto * node = getParentSceneNode()) {
     node->needUpdate();
@@ -314,7 +484,9 @@ void SplatCloud::setShDegree(int d)
 void SplatCloud::applySort(const float * indices, uint32_t count)
 {
   if (!index_vbo_ || count == 0 || count != splat_count_) return;
+  PerfMonitor::instance().startTimer("vbo_upload");
   index_vbo_->writeData(0, count * sizeof(float), indices, true);
+  PerfMonitor::instance().stopTimer("vbo_upload");
 }
 
 // ── MovableObject ─────────────────────────────────────────────────────────────
@@ -332,11 +504,10 @@ void SplatCloud::_updateRenderQueue(Ogre::RenderQueue * queue)
 
   PerfMonitor::instance().recordFrame();
 
-  if (sorter_) {
-    auto * vp = scene_manager_->getCurrentViewport();
-    if (const Ogre::Camera * cam = vp ? vp->getCamera() : nullptr) {
-      sorter_->requestSort(cam->getDerivedDirection());
-      if (auto result = sorter_->pollResult()) {
+  if (auto * vp = scene_manager_->getCurrentViewport()) {
+    if (const Ogre::Camera * cam = vp->getCamera()) {
+      scheduler_->requestSort(cam->getDerivedDirection());
+      if (auto result = scheduler_->takeResult()) {
         applySort(result->indices.data(), result->count);
       }
     }

@@ -16,7 +16,6 @@
 
 namespace gsplat_rviz_trials
 {
-class ISplatSorter;
 class ISplatSource;
 class SplatCloud;
 
@@ -56,11 +55,7 @@ private:
   rviz_common::properties::EnumProperty *       sorter_kind_property_;
 
   std::unique_ptr<SplatCloud>   splat_cloud_;
-  std::unique_ptr<ISplatSorter> sorter_;
   std::unique_ptr<ISplatSource> source_;
-
-  // Cached centres so the sorter can be rebuilt without re-loading data.
-  std::vector<Ogre::Vector3> centers_cache_;
 };
 
 }  // namespace displays

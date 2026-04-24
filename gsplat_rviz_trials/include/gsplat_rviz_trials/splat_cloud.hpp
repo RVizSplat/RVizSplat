@@ -2,6 +2,7 @@
 #define GSPLAT_RVIZ_TRIALS__SPLAT_CLOUD_HPP_
 
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 #include <OgreAxisAlignedBox.h>
@@ -45,13 +46,15 @@ public:
   explicit SplatCloud(Ogre::SceneNode * parent_node);
   ~SplatCloud() override;
 
-  // Inject the depth-sort backend. Caller retains ownership; must outlive
-  // SplatCloud or be cleared with setSorter(nullptr) before destruction.
-  void setSorter(ISplatSorter * sorter) { sorter_ = sorter; }
+  // Transfer ownership of the depth-sort backend. SplatCloud drives the
+  // sorter from an internal worker thread; all uploadCenters()/sort()
+  // calls happen on that thread. Pass nullptr to disable sorting.
+  void setSorter(std::unique_ptr<ISplatSorter> sorter);
 
   // Upload new splat data.  Safe to call from the main thread; TBO
   // creation is deferred to the first notifyRenderSingleObject() call
-  // so the GL context is guaranteed to be current.
+  // so the GL context is guaranteed to be current. The centres are
+  // also forwarded to the sort worker.
   void setSplats(std::vector<SplatGPU> splats, int sh_degree);
   void clear();
 
@@ -63,8 +66,7 @@ public:
 
   uint32_t getSplatCount() const { return splat_count_; }
 
-  // Write sorted indices into the per-instance VBO. Typically called from
-  // _updateRenderQueue() with a result from ISplatSorter::pollResult().
+  // Write sorted indices into the per-instance VBO.
   void applySort(const float * indices, uint32_t count);
 
   // ── Ogre::MovableObject ────────────────────────────────────────────
@@ -118,7 +120,11 @@ private:
 
   Ogre::HardwareVertexBufferSharedPtr index_vbo_;  // per-instance sorted indices
 
-  ISplatSorter * sorter_ = nullptr;  // not owned
+  // Centres kept so the sorter can be swapped without re-loading splat data.
+  std::vector<Ogre::Vector3> centers_cache_;
+
+  class SortScheduler;
+  std::unique_ptr<SortScheduler> scheduler_;
 };
 
 }  // namespace gsplat_rviz_trials

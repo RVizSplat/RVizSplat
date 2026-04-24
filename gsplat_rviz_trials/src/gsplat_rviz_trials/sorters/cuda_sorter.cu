@@ -1,9 +1,15 @@
-#include "gsplat_rviz_trials/sorters/cuda_sorter.hpp"
+#include "gsplat_rviz_trials/sorters/cuda_splat_sorter.hpp"
 
+#include <algorithm>
 #include <cstdio>
 
 #include <cub/cub.cuh>
 #include <cuda_runtime.h>
+
+#include "gsplat_rviz_trials/perf_monitor.hpp"
+
+namespace gsplat_rviz_trials
+{
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -30,6 +36,8 @@
 
 // ── Kernels ───────────────────────────────────────────────────────────────────
 
+namespace {
+
 __global__ void computeDepthsKernel(
   const float3 * __restrict__ centers,
   float3 fwd,
@@ -50,14 +58,36 @@ __global__ void fillFloatIdentityKernel(float * __restrict__ d, uint32_t n)
   }
 }
 
-// ── CudaSorter ────────────────────────────────────────────────────────────────
+}  // namespace
 
-void CudaSorter::init(uint32_t n)
+// ── Impl ──────────────────────────────────────────────────────────────────────
+
+struct CudaSplatSorter::Impl
+{
+  float3 *     d_centers  = nullptr;
+  float *      d_keys_in  = nullptr;
+  float *      d_keys_out = nullptr;
+  float *      d_vals_in  = nullptr;  // identity permutation (set once)
+  float *      d_vals_out = nullptr;
+  float *      h_vals_out = nullptr;  // pinned host
+  void *       d_temp     = nullptr;
+  size_t       temp_bytes = 0;
+  uint32_t     capacity   = 0;
+  uint32_t     count      = 0;
+  cudaStream_t stream     = nullptr;
+  bool         result_ready = false;
+  bool         failed       = false;
+
+  void allocate(uint32_t n);
+  void release();
+  void upload(const float * xyz, uint32_t n);
+  bool sort(const float cam_fwd[3], uint32_t n);
+};
+
+void CudaSplatSorter::Impl::allocate(uint32_t n)
 {
   capacity = n;
-  cudaStream_t s;
-  CUDA_CHECK_VOID(cudaStreamCreate(&s));
-  stream_ = s;
+  CUDA_CHECK_VOID(cudaStreamCreate(&stream));
 
   CUDA_CHECK_VOID(cudaMalloc(&d_centers,  n * sizeof(float3)));
   CUDA_CHECK_VOID(cudaMalloc(&d_keys_in,  n * sizeof(float)));
@@ -66,25 +96,19 @@ void CudaSorter::init(uint32_t n)
   CUDA_CHECK_VOID(cudaMalloc(&d_vals_out, n * sizeof(float)));
   CUDA_CHECK_VOID(cudaMallocHost(&h_vals_out, n * sizeof(float)));
 
-  // Fill identity permutation once — d_vals_in[i] = (float)i, never modified.
-  fillFloatIdentityKernel<<<(n + 255) / 256, 256, 0, s>>>(
-    reinterpret_cast<float *>(d_vals_in), n);
+  fillFloatIdentityKernel<<<(n + 255) / 256, 256, 0, stream>>>(d_vals_in, n);
   CUDA_CHECK_VOID(cudaGetLastError());
 
-  // Determine CUB temporary storage size.
   CUDA_CHECK_VOID(cub::DeviceRadixSort::SortPairsDescending(
     nullptr, temp_bytes,
-    reinterpret_cast<float *>(d_keys_in),
-    reinterpret_cast<float *>(d_keys_out),
-    reinterpret_cast<float *>(d_vals_in),
-    reinterpret_cast<float *>(d_vals_out),
-    static_cast<int>(n), 0, 32, s));
+    d_keys_in, d_keys_out, d_vals_in, d_vals_out,
+    static_cast<int>(n), 0, 32, stream));
   CUDA_CHECK_VOID(cudaMalloc(&d_temp, temp_bytes));
 
-  CUDA_CHECK_VOID(cudaStreamSynchronize(s));
+  CUDA_CHECK_VOID(cudaStreamSynchronize(stream));
 }
 
-void CudaSorter::destroy()
+void CudaSplatSorter::Impl::release()
 {
   if (h_vals_out) { cudaFreeHost(h_vals_out); h_vals_out = nullptr; }
   if (d_centers)  { cudaFree(d_centers);  d_centers  = nullptr; }
@@ -93,51 +117,82 @@ void CudaSorter::destroy()
   if (d_vals_in)  { cudaFree(d_vals_in);  d_vals_in  = nullptr; }
   if (d_vals_out) { cudaFree(d_vals_out); d_vals_out = nullptr; }
   if (d_temp)     { cudaFree(d_temp);     d_temp     = nullptr; }
-  if (stream_) {
-    cudaStreamDestroy(reinterpret_cast<cudaStream_t>(stream_));
-    stream_ = nullptr;
+  if (stream) {
+    cudaStreamDestroy(stream);
+    stream = nullptr;
   }
-  capacity   = 0;
-  temp_bytes = 0;
+  capacity     = 0;
+  count        = 0;
+  temp_bytes   = 0;
+  result_ready = false;
+  failed       = false;
 }
 
-void CudaSorter::uploadCenters(const float * xyz, uint32_t n)
+void CudaSplatSorter::Impl::upload(const float * xyz, uint32_t n)
 {
   CUDA_CHECK_VOID(cudaMemcpyAsync(
     d_centers, xyz, n * sizeof(float3),
-    cudaMemcpyHostToDevice,
-    reinterpret_cast<cudaStream_t>(stream_)));
+    cudaMemcpyHostToDevice, stream));
 }
 
-bool CudaSorter::sort(const float cam_fwd[3], uint32_t n)
+bool CudaSplatSorter::Impl::sort(const float cam_fwd[3], uint32_t n)
 {
-  auto s = reinterpret_cast<cudaStream_t>(stream_);
-
-  // 1. Compute per-splat depth keys.
   const float3 fwd{cam_fwd[0], cam_fwd[1], cam_fwd[2]};
-  computeDepthsKernel<<<(n + 255) / 256, 256, 0, s>>>(
-    reinterpret_cast<const float3 *>(d_centers),
-    fwd,
-    reinterpret_cast<float *>(d_keys_in),
-    n);
+  computeDepthsKernel<<<(n + 255) / 256, 256, 0, stream>>>(
+    d_centers, fwd, d_keys_in, n);
   CUDA_CHECK(cudaGetLastError());
 
-  // 2. CUB descending sort: d_vals_in (identity) → d_vals_out (sorted indices).
   CUDA_CHECK(cub::DeviceRadixSort::SortPairsDescending(
     d_temp, temp_bytes,
-    reinterpret_cast<float *>(d_keys_in),
-    reinterpret_cast<float *>(d_keys_out),
-    reinterpret_cast<float *>(d_vals_in),
-    reinterpret_cast<float *>(d_vals_out),
-    static_cast<int>(n), 0, 32, s));
+    d_keys_in, d_keys_out, d_vals_in, d_vals_out,
+    static_cast<int>(n), 0, 32, stream));
 
-  // 3. Copy sorted indices device→host (pinned, so DMA is fast).
   CUDA_CHECK(cudaMemcpyAsync(
     h_vals_out, d_vals_out, n * sizeof(float),
-    cudaMemcpyDeviceToHost, s));
+    cudaMemcpyDeviceToHost, stream));
 
-  // 4. Wait for the copy to complete before the CPU reads h_vals_out.
-  CUDA_CHECK(cudaStreamSynchronize(s));
-
+  CUDA_CHECK(cudaStreamSynchronize(stream));
   return true;
 }
+
+// ── CudaSplatSorter ───────────────────────────────────────────────────────────
+
+CudaSplatSorter::CudaSplatSorter() : impl_(std::make_unique<Impl>()) {}
+
+CudaSplatSorter::~CudaSplatSorter() { impl_->release(); }
+
+void CudaSplatSorter::uploadCenters(const std::vector<Ogre::Vector3> & centers)
+{
+  impl_->release();
+  const uint32_t n = static_cast<uint32_t>(centers.size());
+  if (n == 0) return;
+
+  PerfMonitor::instance().startTimer("cuda_upload");
+  impl_->count = n;
+  impl_->allocate(n);
+  impl_->upload(&centers[0].x, n);
+  CUDA_CHECK_VOID(cudaStreamSynchronize(impl_->stream));
+  PerfMonitor::instance().stopTimer("cuda_upload");
+}
+
+SortResult CudaSplatSorter::sort(const Ogre::Vector3 & cam_fwd)
+{
+  if (impl_->count == 0 || impl_->failed) return {};
+
+  const float fwd[3] = {cam_fwd.x, cam_fwd.y, cam_fwd.z};
+  PerfMonitor::instance().startTimer("cuda_sort");
+  const bool ok = impl_->sort(fwd, impl_->count);
+  PerfMonitor::instance().stopTimer("cuda_sort");
+  if (!ok) {
+    impl_->failed = true;
+    return {};
+  }
+
+  SortResult r;
+  r.count = impl_->count;
+  r.indices.resize(impl_->count);
+  std::copy(impl_->h_vals_out, impl_->h_vals_out + impl_->count, r.indices.begin());
+  return r;
+}
+
+}  // namespace gsplat_rviz_trials

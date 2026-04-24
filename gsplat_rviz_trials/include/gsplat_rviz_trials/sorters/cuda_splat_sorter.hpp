@@ -6,31 +6,27 @@
 
 #include <OgreVector3.h>
 
-#include "gsplat_rviz_trials/sorters/cuda_sorter.hpp"
 #include "gsplat_rviz_trials/sorters/i_splat_sorter.hpp"
 
 namespace gsplat_rviz_trials
 {
 
-// ISplatSorter adapter over the raw CUDA backend. Synchronous: sort runs
-// inline in requestSort() (~1–2 ms for 1M splats), result ready same frame.
+// Synchronous CUB-based GPU depth-sort. No threading — sort() blocks on
+// cudaStreamSynchronize on the caller's thread. For CUDA-context safety
+// callers should invoke all methods from a single thread.
 class CudaSplatSorter : public ISplatSorter
 {
 public:
-  CudaSplatSorter() = default;
-  ~CudaSplatSorter() override { backend_.destroy(); }
+  CudaSplatSorter();
+  ~CudaSplatSorter() override;
 
   void uploadCenters(const std::vector<Ogre::Vector3> & centers) override;
-  void requestSort(const Ogre::Vector3 & cam_fwd) override;
-  std::unique_ptr<SortResult> pollResult() override;
-  void reset() override;
+  SortResult sort(const Ogre::Vector3 & cam_fwd) override;
   const char * name() const override { return "CUDA"; }
 
 private:
-  CudaSorter backend_;
-  uint32_t   count_ = 0;
-  bool       result_ready_ = false;
-  bool       failed_ = false;
+  struct Impl;
+  std::unique_ptr<Impl> impl_;
 };
 
 }  // namespace gsplat_rviz_trials
