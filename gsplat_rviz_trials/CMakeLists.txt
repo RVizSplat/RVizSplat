@@ -112,9 +112,11 @@ if(CUDAToolkit_FOUND)
   target_link_libraries(gsplat_rviz_trials PRIVATE CUDA::cudart)
 endif()
 
-register_rviz_ogre_media_exports(DIRECTORIES 
+register_rviz_ogre_media_exports(DIRECTORIES
   "ogre_media/materials/scripts"
+  "ogre_media/materials/scripts/wboit"
   "ogre_media/materials/glsl120"
+  "ogre_media/materials/glsl120/wboit"
 )
 
 pluginlib_export_plugin_description_file(rviz_common plugins_description.xml)
