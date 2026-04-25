@@ -14,8 +14,11 @@
 #include "pluginlib/class_list_macros.hpp"
 #include "rviz_common/display_context.hpp"
 #include "rviz_common/properties/status_property.hpp"
+#include "rviz_common/render_panel.hpp"
 #include "rviz_common/view_controller.hpp"
 #include "rviz_common/view_manager.hpp"
+#include "rviz_common/visualization_manager.hpp"
+#include "rviz_rendering/render_window.hpp"
 
 #include "gsplat_rviz_plugin/sorters/i_splat_sorter.hpp"
 #include "gsplat_rviz_plugin/sorters/sorter_factory.hpp"
@@ -71,23 +74,20 @@ GsplatDisplay::GsplatDisplay()
 //   ├── Clip Box  (BoolProperty, expands to show Min/Max)
 //   │   ├── Clip Min
 //   │   └── Clip Max
-//   └── WBOIT  (sub-group, collapsed)
-//       ├── Transparency Mode
-//       ├── WBOIT Weight Scale
-//       ├── WBOIT Weight Exponent
-//       └── WBOIT Alpha Discard
-//
-// Grouping rationale: these are all tuning knobs that a user may want to
-// reach occasionally but don't belong in the top-level clutter. WBOIT is
-// nested one level deeper because it's a niche transparency mode — the
-// default Sorted path needs no tuning, so the WBOIT knobs stay out of view
-// unless the user explicitly opens the sub-group.
+//   ├── WBOIT  (sub-group, collapsed)
+//   │   ├── Transparency Mode
+//   │   ├── WBOIT Weight Scale
+//   │   ├── WBOIT Weight Exponent
+//   │   └── WBOIT Alpha Discard
+//   └── Scene Capture  (sub-group, collapsed)
+//       ├── Save Path
+//       └── Capture
 void GsplatDisplay::buildAdvancedGroup()
 {
   auto * advanced_group = new rviz_common::properties::Property(
     "Advanced", QVariant(),
-    "SH degree, alpha threshold, sort backend, ROI clipping, and transparency "
-    "fallback. Defaults are sensible for most scenes.",
+    "SH degree, alpha threshold, sort backend, ROI clipping, transparency "
+    "fallback, and scene capture. Defaults are sensible for most scenes.",
     this);
   advanced_group->collapse();
 
@@ -113,10 +113,7 @@ void GsplatDisplay::buildAdvancedGroup()
   sorter_kind_property_->addOption("CPU",  static_cast<int>(SorterKind::Cpu));
   sorter_kind_property_->addOption("CUDA", static_cast<int>(SorterKind::Cuda));
 
-  // ROI clip — axis-aligned box in the scene's local frame. Useful for
-  // trimming floaters, hiding ceilings on handheld captures, or isolating
-  // a workspace region. The BoolProperty acts as its own parent: toggling
-  // it reveals/hides the Min/Max children.
+  // ROI clip — axis-aligned box in the scene's local frame.
   clip_enabled_property_ = new rviz_common::properties::BoolProperty(
     "Clip Box", false,
     "Cull splats whose centre falls outside [Clip Min, Clip Max].",
@@ -132,9 +129,7 @@ void GsplatDisplay::buildAdvancedGroup()
     "Maximum corner of the clip AABB.",
     clip_enabled_property_, SLOT(onClipChanged()), this);
 
-  // WBOIT sub-group. Collapsed so the WBOIT-specific knobs only show when
-  // the user opens them; Transparency Mode also lives here because
-  // enabling WBOIT is the entry point to the rest of the sub-group.
+  // WBOIT sub-group.
   auto * wboit_group = new rviz_common::properties::Property(
     "WBOIT", QVariant(),
     "Order-independent transparency. Approximation; use when the sort is "
@@ -169,23 +164,36 @@ void GsplatDisplay::buildAdvancedGroup()
     wboit_group, SLOT(onWboitTuningChanged()), this);
   wboit_alpha_discard_property_->setMin(0.0f);
   wboit_alpha_discard_property_->setMax(0.1f);
+
+  // Scene Capture sub-group — save the current viewport to a PNG/JPEG on disk.
+  auto * capture_group = new rviz_common::properties::Property(
+    "Scene Capture", QVariant(),
+    "Capture the current RViz viewport to an image file.",
+    advanced_group);
+  capture_group->collapse();
+
+  capture_path_property_ = new rviz_common::properties::StringProperty(
+    "Save Path", "/tmp/gsplat_capture.png",
+    "Absolute file path for the captured image (PNG or JPEG, "
+    "determined by extension).",
+    capture_group, SLOT(onCaptureTriggerChanged()), this);
+
+  // BoolProperty acts as a momentary trigger: checking it fires the capture
+  // and the slot immediately resets it to false.
+  capture_trigger_property_ = new rviz_common::properties::BoolProperty(
+    "Capture", false,
+    "Check to save the current viewport to the path above.",
+    capture_group, SLOT(onCaptureTriggerChanged()), this);
 }
 
 GsplatDisplay::~GsplatDisplay()
 {
-  // Detach the WBOIT compositor before the viewport goes away. Safe here
-  // because destruction runs outside the render loop; see the comment
-  // on transparency::wboit_compositor::detach() for why this can't run
-  // during SplatCloud::_updateRenderQueue.
   if (compositor_viewport_) {
     transparency::wboit_compositor::detach(compositor_viewport_);
     compositor_viewport_ = nullptr;
     wboit_compositor_active_ = false;
   }
 
-  // Drop the source before the cloud so any in-flight subscription callback
-  // is torn down first. Bumping the generation ensures any already-queued
-  // main-thread delivery is dropped rather than run during teardown.
   ++source_gen_;
   source_.reset();
   source_kind_ = SourceKind::None;
@@ -200,9 +208,7 @@ void GsplatDisplay::onInitialize()
 
   topic_property_->initialize(context_->getRosNodeAbstraction());
 
-  // Seed uniforms from the initial property values.  applyTransparencyMode
-  // runs here too, but compositor attachment is deferred until the first
-  // update() because the viewport isn't wired up yet.
+  // Seed uniforms from the initial property values.
   onClipChanged();
   onWboitTuningChanged();
   applyTransparencyMode();
@@ -210,29 +216,19 @@ void GsplatDisplay::onInitialize()
 
 void GsplatDisplay::onEnable()
 {
-  // If the current mode is Topic, re-create the subscription (it was torn
-  // down on the previous onDisable). File mode persists across enable/disable.
   if (currentMode() == SourceMode::Topic) {
     onTopicChanged();
   }
-  // Re-apply transparency mode; if WBOIT was active before disable, the
-  // cloud's compositor attach is deferred to its next render pass.
   applyTransparencyMode();
 }
 
 void GsplatDisplay::onDisable()
 {
-  // Only drop the source if it's the ROS one — keep file data resident.
   if (source_kind_ == SourceKind::Topic) {
     ++source_gen_;
     source_.reset();
     source_kind_ = SourceKind::None;
   }
-  // Disable the compositor so another display sharing this viewport
-  // doesn't inherit our WBOIT passes. The user's Transparency Mode
-  // property is untouched, so onEnable's applyTransparencyMode()
-  // re-enables it. Leave the chain entry attached (faster re-enable
-  // and avoids mid-render chain mutation).
   if (wboit_compositor_active_) {
     transparency::wboit_compositor::disable(compositor_viewport_);
     wboit_compositor_active_ = false;
@@ -246,8 +242,6 @@ void GsplatDisplay::reset()
   if (splat_cloud_) splat_cloud_->clear();
   sh_degree_property_->setMax(0);
   sh_degree_property_->setValue(0);
-  // Keep source_ alive: a live ROS subscription should continue delivering
-  // messages after a reset, matching the pre-refactor behaviour.
 }
 
 void GsplatDisplay::onSplatPathChanged()
@@ -335,7 +329,6 @@ GsplatDisplay::SourceMode GsplatDisplay::currentMode() const
 
 void GsplatDisplay::onSourceModeChanged()
 {
-  // Tear down the outgoing source and any visible state tied to it.
   ++source_gen_;
   source_.reset();
   source_kind_ = SourceKind::None;
@@ -347,11 +340,8 @@ void GsplatDisplay::onSourceModeChanged()
   splat_path_property_->setHidden(mode != SourceMode::File);
   topic_property_->setHidden(mode != SourceMode::Topic);
 
-  // Drop any stale status from the other source so only the active one's
-  // status is visible in the panel.
   deleteStatus(mode == SourceMode::File ? "Topic" : "Splat File");
 
-  // Activate the newly-selected source if its field already has a value.
   if (mode == SourceMode::File) {
     onSplatPathChanged();
   } else {
@@ -383,18 +373,36 @@ void GsplatDisplay::onWboitTuningChanged()
   if (context_) context_->queueRender();
 }
 
+void GsplatDisplay::onCaptureTriggerChanged()
+{
+  if (!capture_trigger_property_->getBool()) return;
+
+  // Reset the checkbox immediately so it behaves like a momentary button.
+  capture_trigger_property_->blockSignals(true);
+  capture_trigger_property_->setBool(false);
+  capture_trigger_property_->blockSignals(false);
+
+  const std::string path = capture_path_property_->getStdString();
+  if (path.empty()) {
+    setStatus(
+      rviz_common::properties::StatusProperty::Warn,
+      "Scene Capture", "Save path is empty.");
+    return;
+  }
+
+  captureScreenshot(path);
+  setStatus(
+    rviz_common::properties::StatusProperty::Ok,
+    "Scene Capture", QString("Saved to %1").arg(QString::fromStdString(path)));
+}
+
 void GsplatDisplay::applyTransparencyMode()
 {
   const bool wboit = (transparency_mode_property_ &&
                       transparency_mode_property_->getOptionInt() == 1);
 
-  // Update the cloud's queue-group gate (50 Sorted / 95 WBOIT).
   if (splat_cloud_) splat_cloud_->setOitEnabled(wboit);
 
-  // Toggle the compositor on the current viewport. Running this on the
-  // Qt main thread (we're inside a property slot) means Ogre is *not*
-  // mid-frame, so chain mutations are safe. The first attach also
-  // happens here once a viewport is available.
   if (auto * vp = resolveViewport()) {
     if (wboit) {
       transparency::wboit_compositor::ensureDefined();
@@ -406,9 +414,6 @@ void GsplatDisplay::applyTransparencyMode()
       wboit_compositor_active_ = false;
     }
   }
-  // If vp == nullptr the viewport isn't wired up yet (called from very
-  // early onInitialize); the next applyTransparencyMode call (onEnable
-  // or a property slot) will find it and attach.
 
   if (context_) context_->queueRender();
 }
@@ -438,9 +443,6 @@ void GsplatDisplay::rebuildSorter()
 void GsplatDisplay::installSource(
   std::unique_ptr<ISplatSource> source, SourceKind kind)
 {
-  // Replace the current source atomically from the main thread's perspective:
-  // bump the generation first so any queued delivery from the outgoing source
-  // is dropped, then tear it down, then wire the new one.
   const uint64_t gen = ++source_gen_;
   source_.reset();
   source_kind_ = kind;
@@ -448,8 +450,6 @@ void GsplatDisplay::installSource(
 
   source_->start(
     [this, kind, gen](LoadResult r) {
-      // AutoConnection: direct call on the display's thread (PLY case),
-      // queued post from the ROS executor thread otherwise.
       QMetaObject::invokeMethod(
         this,
         [this, kind, gen, r = std::move(r)]() mutable {
@@ -476,7 +476,6 @@ void GsplatDisplay::onLoadResult(
   const int count = static_cast<int>(result.splats.size());
   const int sh_degree = result.sh_degree;
 
-  // SplatCloud extracts centres internally and forwards them to the sort worker.
   splat_cloud_->setSplats(std::move(result.splats), sh_degree);
 
   sh_degree_property_->setMax(sh_degree);
@@ -493,6 +492,17 @@ void GsplatDisplay::onLoadResult(
     kind == SourceKind::Topic
       ? QString("Received %1 gaussians (SH degree %2)").arg(count).arg(sh_degree)
       : QString("Loaded %1 gaussians").arg(count));
+}
+
+void GsplatDisplay::captureScreenshot(const std::string & path)
+{
+  auto * vm = dynamic_cast<rviz_common::VisualizationManager *>(context_);
+  if (!vm) return;
+  auto * panel = vm->getRenderPanel();
+  if (!panel) return;
+  auto * win = panel->getRenderWindow();
+  if (!win) return;
+  win->captureScreenShot(path);
 }
 
 }  // namespace displays
