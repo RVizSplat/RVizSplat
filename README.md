@@ -1,6 +1,43 @@
 # RVizSplat
 
-## Evaluation
+RVizSplat is an RViz2 display plugin that provides end-to-end visualization of 3D Gaussian Splats in RViz.
+
+### Build status
+
+| ROS distro | Status |
+|---|---|
+| Rolling | [![Rolling](https://github.com/RVizSplat/RVizSplat/actions/workflows/rolling.yml/badge.svg)](https://github.com/RVizSplat/RVizSplat/actions/workflows/rolling.yml) |
+| Kilted  | [![Kilted](https://github.com/RVizSplat/RVizSplat/actions/workflows/kilted.yml/badge.svg)](https://github.com/RVizSplat/RVizSplat/actions/workflows/kilted.yml) |
+| Jazzy   | [![Jazzy](https://github.com/RVizSplat/RVizSplat/actions/workflows/jazzy.yml/badge.svg)](https://github.com/RVizSplat/RVizSplat/actions/workflows/jazzy.yml) |
+
+# How to run (from source)
+
+```bash
+mkdir -p ~/ros_ws/src
+cd ~/ros_ws/src
+git clone https://github.com/RVizSplat/RVizSplat.git
+cd ~/ros_ws
+rosdep update
+rosdep install --from-paths src --ignore-src -r -y
+colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release
+source install/setup.bash
+```
+
+# Install via debians built on the ROS Buildfarm
+
+After sourcing your ROS 2 environment:
+
+```bash
+sudo apt-get install ros-$ROS_DISTRO-gsplat-rviz-plugin ros-$ROS_DISTRO-gsplat-publisher ros-$ROS_DISTRO-gsplat-msgs
+```
+
+# Examples
+
+# Using OIT for performance optimization
+
+# Architecture
+
+# Evaluation
 
 The `gsplat_plugin_evaluation/eval.py` script computes image quality metrics (PSNR, SSIM, LPIPS) between a ref_folder and an eval_folder.
 
