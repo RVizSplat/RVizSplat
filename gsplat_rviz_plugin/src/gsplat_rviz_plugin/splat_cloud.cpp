@@ -504,7 +504,10 @@ void SplatCloud::_updateRenderQueue(Ogre::RenderQueue * queue)
 {
   if (splat_count_ == 0) return;
 
-  PerfMonitor::instance().recordFrame();
+  // FPS counter moved to notifyRenderSingleObject — _updateRenderQueue
+  // fires once per RENDERSCENE compositor pass (3× per real frame in WBOIT
+  // mode), so counting here over-reports WBOIT FPS by a factor equal to
+  // the number of compositor scene passes.
 
   auto * vp = scene_manager_->getCurrentViewport();
 
@@ -571,6 +574,22 @@ void SplatCloud::notifyRenderSingleObject(
   bool)
 {
   if (rend != this) return;
+
+  // FPS counted here so WBOIT mode reports the same number as RViz's
+  // status-bar (which counts real frames). notifyRenderSingleObject
+  // fires once per render dispatch of this Renderable — once per frame
+  // in sorted mode, and twice per frame in WBOIT mode (the accum and
+  // reveal passes both draw the splats). We skip the reveal pass so
+  // each frame is counted exactly once. The default sorted technique's
+  // scheme name is Ogre's MaterialManager::DEFAULT_SCHEME_NAME
+  // ("Default"); WBOIT passes use the explicit scheme names declared
+  // in the material script.
+  if (pass) {
+    const Ogre::String & scheme = pass->getParent()->getSchemeName();
+    if (scheme != "wboit_reveal") {
+      PerfMonitor::instance().recordFrame();
+    }
+  }
 
   if (upload_pending_) {
     uploadTBO();
