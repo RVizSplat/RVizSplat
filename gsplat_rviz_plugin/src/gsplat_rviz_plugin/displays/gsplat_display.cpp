@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <utility>
 
-#include <QFileDialog>
 #include <QMetaObject>
 
 #include <OgreCamera.h>
@@ -50,8 +49,7 @@ GsplatDisplay::GsplatDisplay()
     "Splat File", "",
     "Path to a 3DGS-format PLY file to visualize.",
     this, SLOT(onSplatPathChanged()),
-    this,
-    QFileDialog::ExistingFile);
+    this);
 
   topic_property_ = new rviz_common::properties::RosTopicProperty(
     "Topic", "",

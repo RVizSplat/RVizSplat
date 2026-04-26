@@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 3.10)
 
 project(gsplat_rviz_plugin)
 
+set(QT_NO_CREATE_VERSIONLESS_TARGETS ON)
+
 if(NOT CMAKE_CXX_STANDARD)
   set(CMAKE_CXX_STANDARD 17)
   set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -30,9 +32,13 @@ find_package(rosidl_default_runtime REQUIRED)
 find_package(rosidl_typesupport_cpp REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 
-# Avoid find_package(QT NAMES Qt6 Qt5 ...) due to CMake's default ascending path resolution
-find_package(Qt6 QUIET COMPONENTS Widgets)
-if(Qt6_FOUND)
+# Match the Qt version that rviz_common itself was built against. Picking the
+# wrong one mixes Qt5::Core and Qt6::Widgets in the link graph and trips
+# CMake's INTERFACE_QT_MAJOR_VERSION consistency check.
+#   - jazzy / kilted: rviz_common is Qt5 only
+#   - rolling: rviz_common prefers Qt6 (and does on Noble)
+if("$ENV{ROS_DISTRO}" STREQUAL "rolling")
+  find_package(Qt6 REQUIRED COMPONENTS Widgets)
   set(QT_VERSION_MAJOR 6)
 else()
   find_package(Qt5 REQUIRED COMPONENTS Widgets)
