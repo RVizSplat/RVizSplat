@@ -2,15 +2,17 @@
 
 RVizSplat is an RViz2 display plugin that provides end-to-end visualization of 3D Gaussian Splats in RViz.
 
+<p align="center">
+  <img src="images/rviz_splat.jpg" alt="RVizSplat" width="400">
+</p>
+
 ### Build status
 
-| ROS distro | Status |
-|---|---|
-| Rolling | [![Rolling](https://github.com/RVizSplat/RVizSplat/actions/workflows/rolling.yml/badge.svg)](https://github.com/RVizSplat/RVizSplat/actions/workflows/rolling.yml) |
-| Kilted  | [![Kilted](https://github.com/RVizSplat/RVizSplat/actions/workflows/kilted.yml/badge.svg)](https://github.com/RVizSplat/RVizSplat/actions/workflows/kilted.yml) |
-| Jazzy   | [![Jazzy](https://github.com/RVizSplat/RVizSplat/actions/workflows/jazzy.yml/badge.svg)](https://github.com/RVizSplat/RVizSplat/actions/workflows/jazzy.yml) |
+[![Rolling](https://github.com/RVizSplat/RVizSplat/actions/workflows/rolling.yml/badge.svg)](https://github.com/RVizSplat/RVizSplat/actions/workflows/rolling.yml) &nbsp;&nbsp;&nbsp;
+[![Kilted](https://github.com/RVizSplat/RVizSplat/actions/workflows/kilted.yml/badge.svg)](https://github.com/RVizSplat/RVizSplat/actions/workflows/kilted.yml) &nbsp;&nbsp;&nbsp;
+[![Jazzy](https://github.com/RVizSplat/RVizSplat/actions/workflows/jazzy.yml/badge.svg)](https://github.com/RVizSplat/RVizSplat/actions/workflows/jazzy.yml)
 
-# How to run (from source)
+# How to build and run from source
 
 ```bash
 mkdir -p ~/ros_ws/src
@@ -23,7 +25,9 @@ colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release
 source install/setup.bash
 ```
 
-# Install via debians built on the ROS Buildfarm
+# Installation via apt
+
+This feature is currently under development (See https://github.com/ros/rosdistro/pull/50909 for details)
 
 After sourcing your ROS 2 environment:
 
