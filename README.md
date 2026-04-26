@@ -2,14 +2,14 @@
 
 ## Evaluation
 
-The `evaluation/eval.py` script computes image quality metrics (PSNR, SSIM, LPIPS) between a ref_folder and an eval_folder.
+The `gsplat_plugin_evaluation/eval.py` script computes image quality metrics (PSNR, SSIM, LPIPS) between a ref_folder and an eval_folder.
 
 Images are matched by the trailing 3-digit number in the filename (e.g. `img_001.png` in the ref_folder is paired with `*_001.png` in the eval_folder).
 
 ### Usage
 
 ```bash
-cd evaluation
+cd gsplat_plugin_evaluation
 python eval.py <ref_folder> <eval_folder> [--metrics psnr ssim lpips] [--lpips-net alex|vgg]
 ```
 

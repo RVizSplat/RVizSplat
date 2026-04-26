@@ -9,7 +9,7 @@ namespace
 
 // Convert a SplatArray message into the plugin's GPU-ready struct layout.
 //
-// Wire format (produced by splat_publisher/ply_splat_publisher.py):
+// Wire format (produced by gsplat_publisher/ply_splat_publisher.py):
 //   pose.pose.pose.position            →  center[3]
 //   opacity (uint8, 0..255)            →  alpha = opacity / 255
 //   pose.pose.covariance (6x6 r-major) →  covA/covB from top-left 3x3
@@ -19,7 +19,7 @@ namespace
 // Assumes publisher conformance: uniform harmonics_deg across all splats,
 // deg ≤ 3 (SplatGPU::sh holds 16 coefficients), and spherical_harmonics
 // length == 3·(deg+1)².
-LoadResult splatsFromMessage(const splat_msgs::msg::SplatArray & msg)
+LoadResult splatsFromMessage(const gsplat_msgs::msg::SplatArray & msg)
 {
   LoadResult out;
   out.sh_degree = msg.splats.empty()
@@ -91,9 +91,9 @@ void RosTopicSource::start(Callback cb)
   qos.reliable().transient_local();
 
   try {
-    subscription_ = node_->create_subscription<splat_msgs::msg::SplatArray>(
+    subscription_ = node_->create_subscription<gsplat_msgs::msg::SplatArray>(
       topic_, qos,
-      [this](splat_msgs::msg::SplatArray::ConstSharedPtr msg) {
+      [this](gsplat_msgs::msg::SplatArray::ConstSharedPtr msg) {
         callback_(splatsFromMessage(*msg));
       });
   } catch (const std::exception & e) {
