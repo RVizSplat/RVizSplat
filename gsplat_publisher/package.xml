@@ -2,7 +2,7 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>gsplat_publisher</name>
-  <version>0.1.0</version>
+  <version>0.0.0</version>
   <description>Publishes latched SplatArray messages loaded from a PLY file.</description>
   <maintainer email="mathur.aditya98@gmail.com">Aditya Mathur</maintainer>
   <maintainer email="akashchikhalikar@gmail.com">Akash Chikhalikar</maintainer>
