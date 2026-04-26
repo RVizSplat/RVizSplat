@@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 3.10)
 
 project(gsplat_rviz_plugin)
 
+set(QT_NO_CREATE_VERSIONLESS_TARGETS ON)
+
 if(NOT CMAKE_CXX_STANDARD)
   set(CMAKE_CXX_STANDARD 17)
   set(CMAKE_CXX_STANDARD_REQUIRED ON)
