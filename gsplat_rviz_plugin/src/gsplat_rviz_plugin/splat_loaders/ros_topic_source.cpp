@@ -9,7 +9,7 @@ namespace
 
 // Convert a SplatArray message into the plugin's GPU-ready struct layout.
 //
-// Wire format (produced by splat_publisher/ply_splat_publisher.py):
+// Wire format (produced by gsplat_publisher/ply_splat_publisher.py):
 //   pose.pose.pose.position            →  center[3]
 //   opacity (uint8, 0..255)            →  alpha = opacity / 255
 //   pose.pose.covariance (6x6 r-major) →  covA/covB from top-left 3x3

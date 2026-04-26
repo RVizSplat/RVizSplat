@@ -3,7 +3,7 @@ import os
 
 from setuptools import find_packages, setup
 
-package_name = 'splat_publisher'
+package_name = 'gsplat_publisher'
 
 splats_dir = os.path.join(os.path.dirname(__file__), '..', 'splats')
 ply_files = glob.glob(os.path.join(splats_dir, '*.ply'))
@@ -26,7 +26,7 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'ply_splat_publisher = splat_publisher.ply_splat_publisher:main',
+            'ply_splat_publisher = gsplat_publisher.ply_splat_publisher:main',
         ],
     },
 )

@@ -12,7 +12,7 @@ from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from gsplat_msgs.msg import Splat, SplatArray
 
-from splat_publisher.ply_reader import read_ply_vertex
+from gsplat_publisher.ply_reader import read_ply_vertex
 
 
 def _sigmoid_vec(x: np.ndarray) -> np.ndarray:
@@ -143,7 +143,7 @@ def _load_splat_array(ply_path: str, sh_degree: int, stamp, frame_id: str) -> Sp
 
 class PlySplatPublisher(Node):
     def __init__(self):
-        super().__init__('splat_publisher')
+        super().__init__('gsplat_publisher')
 
         self.declare_parameter('ply_path', '')
         self.declare_parameter('sh_degree', 3)
@@ -152,7 +152,7 @@ class PlySplatPublisher(Node):
         sh_degree = self.get_parameter('sh_degree').get_parameter_value().integer_value
 
         if not ply_path:
-            pkg_share = get_package_share_directory('splat_publisher')
+            pkg_share = get_package_share_directory('gsplat_publisher')
             ply_path = os.path.join(pkg_share, 'splats', 'only_bonsai.ply')
 
         sh_degree = max(0, min(3, sh_degree))

@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
-  <name>splat_publisher</name>
+  <name>gsplat_publisher</name>
   <version>0.1.0</version>
   <description>Publishes latched SplatArray messages loaded from a PLY file.</description>
   <maintainer email="user@example.com">user</maintainer>
