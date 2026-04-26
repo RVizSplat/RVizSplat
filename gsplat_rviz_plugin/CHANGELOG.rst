@@ -2,8 +2,8 @@
 Changelog for package gsplat_rviz_plugin
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Forthcoming
------------
+1.0.0 (2026-04-26)
+------------------
 * Add maintainers (`#25 <https://github.com/RVizSplat/RVizSplat/issues/25>`_)
 * Rename packages to follow a single naming scheme (`#23 <https://github.com/RVizSplat/RVizSplat/issues/23>`_)
 * Add CI workflows for Humble, Jazzy, and Kilted ROS distributions (`#19 <https://github.com/RVizSplat/RVizSplat/issues/19>`_)

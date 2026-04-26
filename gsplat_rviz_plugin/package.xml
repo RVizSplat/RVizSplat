@@ -4,7 +4,7 @@
   schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="2">
   <name>gsplat_rviz_plugin</name>
-  <version>0.0.0</version>
+  <version>1.0.0</version>
   <description>
     Custom rviz2 display plugins for Gaussian Splatting visualization.
   </description>
