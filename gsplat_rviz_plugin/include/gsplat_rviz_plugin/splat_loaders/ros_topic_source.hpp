@@ -4,7 +4,7 @@
 #include <string>
 
 #include <rclcpp/rclcpp.hpp>
-#include <splat_msgs/msg/splat_array.hpp>
+#include <gsplat_msgs/msg/splat_array.hpp>
 
 #include "gsplat_rviz_plugin/splat_loaders/i_splat_source.hpp"
 
@@ -25,7 +25,7 @@ private:
   rclcpp::Node::SharedPtr node_;
   std::string topic_;
   Callback callback_;
-  rclcpp::Subscription<splat_msgs::msg::SplatArray>::SharedPtr subscription_;
+  rclcpp::Subscription<gsplat_msgs::msg::SplatArray>::SharedPtr subscription_;
 };
 
 }  // namespace gsplat_rviz_plugin

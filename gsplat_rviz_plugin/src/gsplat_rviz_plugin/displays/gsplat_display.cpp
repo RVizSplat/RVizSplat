@@ -53,8 +53,8 @@ GsplatDisplay::GsplatDisplay()
 
   topic_property_ = new rviz_common::properties::RosTopicProperty(
     "Topic", "",
-    "splat_msgs/msg/SplatArray",
-    "splat_msgs/SplatArray topic to subscribe to. Each message replaces "
+    "gsplat_msgs/msg/SplatArray",
+    "gsplat_msgs/SplatArray topic to subscribe to. Each message replaces "
     "the currently displayed splats.",
     this, SLOT(onTopicChanged()), this);
   // Default mode is PLY File — hide the topic field until the user flips it.

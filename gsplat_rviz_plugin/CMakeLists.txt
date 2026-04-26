@@ -24,7 +24,7 @@ find_package(rclcpp REQUIRED)
 find_package(rviz_common REQUIRED)
 find_package(rviz_rendering REQUIRED)
 find_package(rviz_ogre_vendor REQUIRED)
-find_package(splat_msgs REQUIRED)
+find_package(gsplat_msgs REQUIRED)
 find_package(Boost REQUIRED)
 find_package(GLEW REQUIRED)
 find_package(CUDAToolkit QUIET)
@@ -32,11 +32,6 @@ find_package(rosidl_default_runtime REQUIRED)
 find_package(rosidl_typesupport_cpp REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 
-# Match the Qt version that rviz_common itself was built against. Picking the
-# wrong one mixes Qt5::Core and Qt6::Widgets in the link graph and trips
-# CMake's INTERFACE_QT_MAJOR_VERSION consistency check.
-#   - jazzy / kilted: rviz_common is Qt5 only
-#   - rolling: rviz_common prefers Qt6 (and does on Noble)
 if("$ENV{ROS_DISTRO}" STREQUAL "rolling")
   find_package(Qt6 REQUIRED COMPONENTS Widgets)
   set(QT_VERSION_MAJOR 6)
@@ -105,10 +100,10 @@ target_link_libraries(gsplat_rviz_plugin PUBLIC
   Boost::boost
 )
 
-#rosidl_get_typesupport_target(cpp_typesupport_target splat_msgs "rosidl_typesupport_cpp")
+#rosidl_get_typesupport_target(cpp_typesupport_target gsplat_msgs "rosidl_typesupport_cpp")
 target_link_libraries(gsplat_rviz_plugin PUBLIC
-    splat_msgs::splat_msgs__rosidl_typesupport_cpp
-  ) 
+    gsplat_msgs::gsplat_msgs__rosidl_typesupport_cpp
+  )
 #target_link_libraries(gsplat_rviz_plugin PUBLIC "${cpp_typesupport_target}")
 
 target_compile_definitions(gsplat_rviz_plugin PRIVATE "GSPLAT_RVIZ_PLUGIN_BUILDING_LIBRARY")
@@ -133,7 +128,7 @@ ament_export_dependencies(
   rviz_common
   rviz_ogre_vendor
   rviz_rendering
-  splat_msgs
+  gsplat_msgs
   Qt${QT_VERSION_MAJOR}
 )
 

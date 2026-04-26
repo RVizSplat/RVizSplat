@@ -10,7 +10,7 @@ from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import PoseWithCovarianceStamped
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
-from splat_msgs.msg import Splat, SplatArray
+from gsplat_msgs.msg import Splat, SplatArray
 
 from splat_publisher.ply_reader import read_ply_vertex
 
