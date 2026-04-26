@@ -4,7 +4,10 @@
   <name>gsplat_publisher</name>
   <version>0.1.0</version>
   <description>Publishes latched SplatArray messages loaded from a PLY file.</description>
-  <maintainer email="user@example.com">user</maintainer>
+  <maintainer email="mathur.aditya98@gmail.com">Aditya Mathur</maintainer>
+  <maintainer email="akashchikhalikar@gmail.com">Akash Chikhalikar</maintainer>
+  <maintainer email="rssuchetan@gmail.com">Suchetan Saravanan</maintainer>
+  <maintainer email="videhpatel25@gmail.com">Videh Patel</maintainer>
   <license>Apache-2.0</license>
 
   <exec_depend>rclpy</exec_depend>
