@@ -37,9 +37,31 @@ sudo apt-get install ros-$ROS_DISTRO-gsplat-rviz-plugin ros-$ROS_DISTRO-gsplat-p
 
 # Examples
 
+## Rendering of a LeRobot SO-100 arm with a scene containing 6 million splats
+
+<p align="left">
+  <img src="images/le_robot_6mil.gif" alt="LeRobot SO-100 arm with 6 million splats" width="500">
+</p>
+
+## Rendering of transparent markers along with other gaussians
+
+<p align="left">
+  <img src="images/alpha_0_5_marker.gif" alt="Transparent markers rendered with gaussians" width="500">
+</p>
+
 # Using OIT for performance optimization
 
+If you have a resource constrained CPU and a weaker GPU (just integrated graphics), you might want to consider bypassing sorting entirely. For this use case, we provide OIT based implementations.
+
+To activate this, follow the "Advanced" options in the RViz plugin and select WBOIT.
+
+<p align="left">
+  <img src="images/rviz_wboit.png" alt="RViz WBOIT" width="400">
+</p>
+
 # Architecture
+
+Coming soon!
 
 # Evaluation
 
